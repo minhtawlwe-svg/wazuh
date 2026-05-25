@@ -1,0 +1,95 @@
+<Sysmon schemaversion="4.90">
+
+  <!-- ======================================
+       SOC Production Tuned Sysmon Config
+       (Noise Reduced + SIEM Friendly)
+  ======================================= -->
+
+  <HashAlgorithms>sha256</HashAlgorithms>
+  <CheckRevocation>true</CheckRevocation>
+
+  <EventFiltering>
+
+    <!-- =========================
+         1. PROCESS CREATION (HIGH VALUE)
+         Event ID 1
+    ========================== -->
+    <ProcessCreate onmatch="include">
+
+      <!-- Include all processes -->
+      <Image condition="is">*</Image>
+
+      <!-- EXCLUSIONS (Noise reduction) -->
+      <Image condition="contains">\Windows\System32\</Image>
+      <Image condition="contains">\Windows\SysWOW64\</Image>
+    </ProcessCreate>
+
+    <!-- =========================
+         2. NETWORK CONNECTIONS (ATTACK RELEVANT)
+         Event ID 3
+    ========================== -->
+    <NetworkConnect onmatch="include">
+
+      <!-- Exclude local noise -->
+      <Image condition="contains">\Windows\System32\</Image>
+      <Image condition="contains">\Microsoft\</Image>
+
+    </NetworkConnect>
+
+    <!-- =========================
+         3. FILE CREATION (LIMITED)
+         Event ID 11
+    ========================== -->
+    <FileCreate onmatch="include">
+
+      <!-- Focus suspicious locations -->
+      <TargetFilename condition="contains">\Temp\</TargetFilename>
+      <TargetFilename condition="contains">\Downloads\</TargetFilename>
+      <TargetFilename condition="contains">\AppData\</TargetFilename>
+
+    </FileCreate>
+
+    <!-- =========================
+         4. REGISTRY CHANGES (PERSISTENCE)
+         Event ID 12,13,14
+    ========================== -->
+    <RegistryEvent onmatch="include">
+
+      <!-- Persistence areas -->
+      <TargetObject condition="contains">\Run</TargetObject>
+      <TargetObject condition="contains">\RunOnce</TargetObject>
+      <TargetObject condition="contains">\Services</TargetObject>
+      <TargetObject condition="contains">\CurrentVersion\Run</TargetObject>
+
+    </RegistryEvent>
+
+    <!-- =========================
+         5. IMAGE LOAD (LIMITED)
+         Event ID 7
+    ========================== -->
+    <ImageLoad onmatch="exclude">
+
+      <!-- Reduce noise from Windows DLLs -->
+      <Image condition="contains">\Windows\System32\</Image>
+      <Image condition="contains">\Windows\SysWOW64\</Image>
+
+    </ImageLoad>
+
+    <!-- =========================
+         6. DRIVER LOAD (HIGH RISK)
+         Event ID 6
+    ========================== -->
+    <DriverLoad onmatch="include">
+      <Image condition="is">*</Image>
+    </DriverLoad>
+
+    <!-- =========================
+         7. RAW ACCESS READ (OPTIONAL HIGH RISK)
+    ========================== -->
+    <RawAccessRead onmatch="include">
+      <Image condition="is">*</Image>
+    </RawAccessRead>
+
+  </EventFiltering>
+
+</Sysmon>

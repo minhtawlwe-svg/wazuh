@@ -34,8 +34,8 @@ Run this command on target Linux endpoint:
 
 ```bash
 curl -fsSL https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-linux/wz-agent.sh | bash
-
+```
 ## Uninstall script 
 ```bash
 curl -fsSL https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-linux/uninstall.sh | sudo bash -s -- --force
-
+```

@@ -1,130 +1,104 @@
 #!/bin/bash
 
-set -e
-
-# =====================================
-# Wazuh Linux Agent Installer (PROD)
-# =====================================
-
 WAZUH_MANAGER="<MANAGER_IP>"
 
-clear
-
 echo "=========================================="
-echo "     WAZUH AGENT INSTALLER (PROD)"
+echo "   WAZUH AGENT INSTALLER (AUTO MODE)"
 echo "=========================================="
-echo ""
-echo "[INFO] Wazuh Manager: ${WAZUH_MANAGER}"
+echo "[INFO] Manager: $WAZUH_MANAGER"
 echo ""
 
-# -------------------------------------
-# Require root
-# -------------------------------------
 if [ "$EUID" -ne 0 ]; then
-    echo "[ERROR] Please run as root or sudo"
+    echo "[ERROR] Run as root"
     exit 1
 fi
 
-# -------------------------------------
-# Ask for pre-generated agent key
-# -------------------------------------
-while true; do
-    read -rp "👉 Paste Wazuh Agent Key: " AGENT_KEY
+echo "[INPUT] Paste key (CTRL+D to finish):"
+AGENT_KEY=$(cat)
 
-    if [ -n "$AGENT_KEY" ]; then
-        break
-    fi
-
-    echo "[WARNING] Agent key cannot be empty"
-done
+if [ -z "$AGENT_KEY" ]; then
+    echo "[ERROR] Empty input"
+    exit 1
+fi
 
 echo ""
-echo "[+] Agent key received"
-echo ""
+echo "[+] Detecting key format..."
 
-# -------------------------------------
-# Install dependencies
-# -------------------------------------
-echo "[+] Installing dependencies..."
+# -------------------------------
+# AUTO DETECTION LOGIC
+# -------------------------------
+
+if echo "$AGENT_KEY" | grep -qE "^0[0-9]{2} "; then
+
+    echo "[INFO] Detected: Wazuh CLIENT KEY (manage_agents format)"
+    KEY_TYPE="CLIENT_KEY"
+
+elif echo "$AGENT_KEY" | grep -qE "^[A-Za-z0-9+/=]{40,}$"; then
+
+    echo "[INFO] Detected: Possible encoded/auth key"
+    KEY_TYPE="ENCODED_KEY"
+
+else
+
+    echo "[INFO] Unknown format"
+    KEY_TYPE="UNKNOWN"
+
+fi
+
+# -------------------------------
+# INSTALL WAZUH AGENT
+# -------------------------------
+echo "[+] Installing Wazuh agent..."
+
 apt-get update -y
 apt-get install -y curl gnupg apt-transport-https
-
-# -------------------------------------
-# Add Wazuh GPG key
-# -------------------------------------
-echo "[+] Adding Wazuh GPG key..."
-
-mkdir -p /usr/share/keyrings
 
 curl -fsSL https://packages.wazuh.com/key/GPG-KEY-WAZUH \
 | gpg --dearmor -o /usr/share/keyrings/wazuh.gpg
 
-# -------------------------------------
-# Add Wazuh repository
-# -------------------------------------
-echo "[+] Adding Wazuh repository..."
-
 echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" \
 > /etc/apt/sources.list.d/wazuh.list
-
-# -------------------------------------
-# Install Wazuh agent
-# -------------------------------------
-echo "[+] Installing Wazuh Agent..."
 
 apt-get update -y
 apt-get install -y wazuh-agent
 
-# -------------------------------------
-# Configure manager IP
-# -------------------------------------
-echo "[+] Configuring manager IP..."
-
 sed -i "s|<address>.*</address>|<address>${WAZUH_MANAGER}</address>|g" \
 /var/ossec/etc/ossec.conf
 
-# -------------------------------------
-# Import pre-generated key
-# -------------------------------------
-echo "[+] Importing agent key..."
+# -------------------------------
+# KEY HANDLING LOGIC
+# -------------------------------
 
-TMP_KEY_FILE="/tmp/wazuh-agent.key"
+TMP="/tmp/wazuh.key"
+echo "$AGENT_KEY" > "$TMP"
 
-echo "$AGENT_KEY" > "$TMP_KEY_FILE"
+if [ "$KEY_TYPE" = "CLIENT_KEY" ]; then
 
-/var/ossec/bin/manage_agents -i "$TMP_KEY_FILE"
+    echo "[+] Importing via manage_agents -i"
+    /var/ossec/bin/manage_agents -i "$TMP"
 
-rm -f "$TMP_KEY_FILE"
+elif [ "$KEY_TYPE" = "ENCODED_KEY" ]; then
 
-# -------------------------------------
-# Enable & start service
-# -------------------------------------
-echo "[+] Starting Wazuh Agent..."
+    echo "[WARNING] Key format not compatible with manage_agents -i"
+    echo "[INFO] Trying fallback: auth method NOT supported in this script"
+    echo "[ERROR] Please use FULL client key from manager (manage_agents -e)"
+    exit 1
 
+else
+
+    echo "[ERROR] Unsupported key format"
+    exit 1
+
+fi
+
+rm -f "$TMP"
+
+# -------------------------------
+# START SERVICE
+# -------------------------------
 systemctl daemon-reload
 systemctl enable wazuh-agent --now
 systemctl restart wazuh-agent
 
-sleep 3
-
-# -------------------------------------
-# Verify service
-# -------------------------------------
 echo ""
-echo "[+] Checking service status..."
-
-if systemctl is-active --quiet wazuh-agent; then
-    echo "[SUCCESS] Wazuh Agent is running"
-else
-    echo "[ERROR] Wazuh Agent failed to start"
-    exit 1
-fi
-
-echo ""
-echo "=========================================="
-echo "       INSTALLATION COMPLETED"
-echo "=========================================="
-echo "[INFO] Manager : ${WAZUH_MANAGER}"
-echo "[INFO] Service : wazuh-agent"
-echo "[SUCCESS] Agent installed successfully"
-echo "=========================================="
+echo "[SUCCESS] Wazuh Agent Installed"

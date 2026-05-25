@@ -2,10 +2,15 @@
 
 ---
 
-## ⚡ One-Line Install (IMPORTANT)
+## ⚡ One-Line Install Normal sysmon (IMPORTANT)
 ```
-irm "https://raw.githubusercontent.com/yekyawhan/wazuh/aed3939d2b571e17ba435b7c19f8b8fc3793d312/sysmon/install-sysmon.ps1" | iex
+irm "https://raw.githubusercontent.com/yekyawhan/wazuh/refs/heads/git-home/sysmon/install-sysmon.ps1" | iex
 ```
+## ⚡ One-Line Install custom sysmon (IMPORTANT)
+```
+irm "https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/sysmon/install-sysmon-custom.ps1" | iex
+```
+
 
 ## Manual install လုပ်ချင်ရင်
 ```

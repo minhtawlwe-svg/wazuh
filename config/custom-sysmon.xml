@@ -1,0 +1,71 @@
+<Sysmon schemaversion="4.90">
+
+  <!-- =====================================
+       Sysmon Configuration (Custom Baseline)
+       SOC / SIEM Friendly (Wazuh Ready)
+  ====================================== -->
+
+  <HashAlgorithms>sha256</HashAlgorithms>
+  <CheckRevocation>true</CheckRevocation>
+
+  <EventFiltering>
+
+    <!-- =========================
+         1. PROCESS CREATION
+    ========================== -->
+    <ProcessCreate onmatch="include">
+      <Image condition="is">*</Image>
+    </ProcessCreate>
+
+    <!-- =========================
+         2. NETWORK CONNECTIONS
+    ========================== -->
+    <NetworkConnect onmatch="include">
+      <Image condition="is">*</Image>
+    </NetworkConnect>
+
+    <!-- =========================
+         3. FILE CREATION TIME
+    ========================== -->
+    <FileCreateTime onmatch="include">
+      <Image condition="is">*</Image>
+    </FileCreateTime>
+
+    <!-- =========================
+         4. FILE CREATION
+    ========================== -->
+    <FileCreate onmatch="include">
+      <Image condition="is">*</Image>
+    </FileCreate>
+
+    <!-- =========================
+         5. REGISTRY EVENTS
+    ========================== -->
+    <RegistryEvent onmatch="include">
+      <Image condition="is">*</Image>
+    </RegistryEvent>
+
+    <!-- =========================
+         6. IMAGE LOADING (DLL)
+    ========================== -->
+    <ImageLoad onmatch="include">
+      <Image condition="is">*</Image>
+    </ImageLoad>
+
+    <!-- =========================
+         7. DRIVER LOADING
+    ========================== -->
+    <DriverLoad onmatch="include">
+      <Image condition="is">*</Image>
+    </DriverLoad>
+
+    <!-- =========================
+         8. RAW ACCESS READ
+    ========================== -->
+    <RawAccessRead onmatch="include">
+      <Image condition="is">*</Image>
+    </RawAccessRead>
+
+  </EventFiltering>
+
+</Sysmon>

@@ -33,7 +33,9 @@ It supports:
 Run this command on target Linux endpoint:
 
 ```bash
-curl -fsSL https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-linux/wz-agent.sh | bash
+wget https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-linux/wz-agent.sh
+chmod +x wz-agent.sh
+sudo ./wz-agent.sh
 ```
 ## Uninstall script 
 ```bash

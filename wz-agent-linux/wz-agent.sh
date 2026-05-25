@@ -1,95 +1,116 @@
 #!/bin/bash
 
-# =========================
-# Wazuh Agent Installer
-# SOC Production Grade
-# =========================
+set -e
 
 WAZUH_MANAGER="<MANAGER_IP>"
 
-echo "====================================="
-echo "     WAZUH AGENT INSTALLER (SOC)"
-echo "====================================="
-echo ""
+clear
 
-# -------------------------
-# Show manager info FIRST
-# -------------------------
+echo "=========================================="
+echo "     WAZUH AGENT INSTALLER (PROD)"
+echo "=========================================="
+echo ""
 echo "[INFO] Wazuh Manager: ${WAZUH_MANAGER}"
 echo ""
 
-# -------------------------
-# Ask key with retry loop
-# -------------------------
-WAZUH_KEY=""
+# -------------------------------
+# Require root
+# -------------------------------
+if [ "$EUID" -ne 0 ]; then
+    echo "[ERROR] Please run as root"
+    exit 1
+fi
 
-while [ -z "$WAZUH_KEY" ]; do
-    read -sp "👉 Enter Wazuh Agent Key (required): " WAZUH_KEY
-    echo ""
+# -------------------------------
+# Ask for agent key
+# -------------------------------
+while true; do
+    echo "Paste Wazuh pre-generated agent key"
+    echo "When finished press CTRL+D"
+    echo "-----------------------------------"
 
-    if [ -z "$WAZUH_KEY" ]; then
-        echo "[WARNING] Key cannot be empty. Try again..."
-        echo ""
+    AGENT_KEY=$(cat)
+
+    if [ -n "$AGENT_KEY" ]; then
+        break
     fi
+
+    echo ""
+    echo "[WARNING] Agent key cannot be empty"
+    echo ""
 done
 
 echo ""
-echo "[+] Key received. Starting installation..."
+echo "[+] Agent key received"
 echo ""
 
-# -------------------------
-# Install prerequisites
-# -------------------------
-echo "[+] Installing prerequisites..."
+# -------------------------------
+# Install dependencies
+# -------------------------------
+echo "[+] Installing dependencies..."
 apt-get update -y
-apt-get install -y gnupg apt-transport-https curl lsb-release
+apt-get install -y curl gnupg apt-transport-https
 
-# -------------------------
-# Add Wazuh repo (secure method)
-# -------------------------
-echo "[+] Adding Wazuh GPG key..."
+# -------------------------------
+# Add repo securely
+# -------------------------------
+echo "[+] Adding Wazuh repository..."
+
 curl -fsSL https://packages.wazuh.com/key/GPG-KEY-WAZUH \
 | gpg --dearmor -o /usr/share/keyrings/wazuh.gpg
 
-echo "[+] Adding Wazuh repository..."
 echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" \
-| tee /etc/apt/sources.list.d/wazuh.list
+> /etc/apt/sources.list.d/wazuh.list
 
-# -------------------------
-# Install agent
-# -------------------------
-echo "[+] Installing Wazuh agent..."
 apt-get update -y
+
+# -------------------------------
+# Install Wazuh Agent
+# -------------------------------
+echo "[+] Installing Wazuh Agent..."
 apt-get install -y wazuh-agent
 
-# -------------------------
+# -------------------------------
 # Configure manager
-# -------------------------
+# -------------------------------
 echo "[+] Configuring manager IP..."
-sed -i "s/<address>.*<\/address>/<address>${WAZUH_MANAGER}<\/address>/g" /var/ossec/etc/ossec.conf
 
-# -------------------------
-# Register key
-# -------------------------
-echo "[+] Registering agent key..."
-echo "$WAZUH_KEY" > /var/ossec/etc/authd.pass
+sed -i "s|<address>.*</address>|<address>${WAZUH_MANAGER}</address>|g" \
+/var/ossec/etc/ossec.conf
 
-# -------------------------
-# Enable service
-# -------------------------
-echo "[+] Enabling and starting service..."
-systemctl daemon-reexec
+# -------------------------------
+# Import Agent Key
+# -------------------------------
+echo "[+] Importing agent key..."
+
+TMP_KEY_FILE="/tmp/wazuh-agent.key"
+
+echo "$AGENT_KEY" > "$TMP_KEY_FILE"
+
+/var/ossec/bin/manage_agents -i "$TMP_KEY_FILE"
+
+rm -f "$TMP_KEY_FILE"
+
+# -------------------------------
+# Enable/start service
+# -------------------------------
+echo "[+] Starting service..."
+
 systemctl daemon-reload
 systemctl enable wazuh-agent --now
-
 systemctl restart wazuh-agent
 
-# -------------------------
-# Verification
-# -------------------------
+sleep 3
+
+# -------------------------------
+# Verify
+# -------------------------------
 echo ""
 echo "[+] Checking service status..."
-systemctl status wazuh-agent --no-pager
+systemctl --no-pager --full status wazuh-agent
 
 echo ""
-echo "[SUCCESS] Wazuh Agent deployed successfully"
+echo "=========================================="
+echo "[SUCCESS] Wazuh Agent Installed"
+echo "[INFO] Manager: ${WAZUH_MANAGER}"
+echo "=========================================="

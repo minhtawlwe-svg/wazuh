@@ -2,12 +2,12 @@
 
 ---
 
-⚡ One-Line Install (IMPORTANT)
+## ⚡ One-Line Install (IMPORTANT)
 ```
 irm "https://raw.githubusercontent.com/yekyawhan/wazuh/aed3939d2b571e17ba435b7c19f8b8fc3793d312/sysmon/install-sysmon.ps1" | iex
 ```
 
-Manual install လုပ်ချင်ရင်
+## Manual install လုပ်ချင်ရင်
 ```
 powershell -ExecutionPolicy Bypass -File .\install-sysmon.ps1
 ```
@@ -15,6 +15,15 @@ powershell -ExecutionPolicy Bypass -File .\install-sysmon.ps1
 ```
 .\install-sysmon.ps1 -Uninstall
 ```
+## 🔍 Verify Installation
+```
+Get-Service sysmon*
+```
+### Check event logs:
+```
+Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 10
+```
+
 
 ## 🇲🇲 
 ဒီ repository က Microsoft Sysmon ကို PowerShell နဲ့ အလိုအလျောက် install လုပ်ပေးတဲ့ script ဖြစ်ပါတယ်။

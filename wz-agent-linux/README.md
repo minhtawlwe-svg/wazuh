@@ -39,5 +39,13 @@ sudo ./wz-agent.sh
 ```
 ## Uninstall script 
 ```bash
+wget https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-linux/uninstall.sh
+chmod +x uninstall.sh
+sudo ./uninstall.sh
+```
+or
+```
 curl -fsSL https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-linux/uninstall.sh | sudo bash -s -- --force
 ```
+TYPE >> DELETE << THEM UNINSTALL 
+

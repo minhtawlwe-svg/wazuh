@@ -13,14 +13,17 @@ echo ""
 echo "[INFO] Manager: $WAZUH_MANAGER"
 echo ""
 
+# -----------------------------
+# Require root
+# -----------------------------
 if [ "$EUID" -ne 0 ]; then
     echo "[ERROR] Run as root"
     exit 1
 fi
 
-# --------------------------------
-# Ask agent key
-# --------------------------------
+# -----------------------------
+# Ask for agent key
+# -----------------------------
 while true; do
     read -rp "👉 Paste Wazuh Agent Key: " AGENT_KEY
 
@@ -35,9 +38,9 @@ echo ""
 echo "[+] Key received, continuing installation..."
 echo ""
 
-# --------------------------------
+# -----------------------------
 # Setup repo (GPG-safe)
-# --------------------------------
+# -----------------------------
 echo "[+] Setting up Wazuh repository key..."
 
 mkdir -p /usr/share/keyrings
@@ -53,35 +56,43 @@ cat > /etc/apt/sources.list.d/wazuh.list <<EOF
 deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main
 EOF
 
-# --------------------------------
+# -----------------------------
 # Install agent
-# --------------------------------
+# -----------------------------
 echo "[+] Installing Wazuh Agent..."
 
 apt-get update -y
-apt-get install -y wazuh-agent
+apt-get install -y curl gnupg apt-transport-https wazuh-agent
 
-# --------------------------------
+# -----------------------------
 # Configure manager
-# --------------------------------
+# -----------------------------
 echo "[+] Configuring manager..."
 
 sed -i "s|<address>.*</address>|<address>${WAZUH_MANAGER}</address>|g" \
 /var/ossec/etc/ossec.conf
 
-# --------------------------------
-# Import key (FIXED)
-# --------------------------------
+# -----------------------------
+# Import key (REAL FIX)
+# -----------------------------
 echo "[+] Importing agent key..."
 
-printf '%s\n' "$AGENT_KEY" | /var/ossec/bin/manage_agents -i
+IMPORT_OUTPUT=$(/var/ossec/bin/manage_agents -i "$AGENT_KEY" 2>&1 || true)
+
+echo "$IMPORT_OUTPUT"
+
+if echo "$IMPORT_OUTPUT" | grep -qi "Invalid authentication key"; then
+    echo ""
+    echo "[ERROR] Invalid Wazuh Agent Key"
+    exit 1
+fi
 
 echo ""
-echo "[+] Agent key imported"
+echo "[+] Agent key imported successfully"
 
-# --------------------------------
+# -----------------------------
 # Start service
-# --------------------------------
+# -----------------------------
 echo "[+] Starting Wazuh Agent..."
 
 systemctl daemon-reload
@@ -90,9 +101,9 @@ systemctl restart wazuh-agent
 
 sleep 3
 
-# --------------------------------
+# -----------------------------
 # Verify
-# --------------------------------
+# -----------------------------
 echo ""
 echo "[+] Checking status..."
 

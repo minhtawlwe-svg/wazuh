@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e
+set -euo pipefail
 
 WAZUH_MANAGER="<MANAGER_IP>"
 
@@ -10,14 +10,14 @@ echo "=========================================="
 echo "     WAZUH AGENT INSTALLER (SOC)"
 echo "=========================================="
 echo ""
-echo "[INFO] Manager: $WAZUH_MANAGER"
+echo "[INFO] Manager: ${WAZUH_MANAGER}"
 echo ""
 
 # -----------------------------
 # Require root
 # -----------------------------
 if [ "$EUID" -ne 0 ]; then
-    echo "[ERROR] Run as root"
+    echo "[ERROR] Run as root or sudo"
     exit 1
 fi
 
@@ -39,9 +39,21 @@ echo "[+] Key received, continuing installation..."
 echo ""
 
 # -----------------------------
-# Setup repo (GPG-safe)
+# Install dependencies
 # -----------------------------
-echo "[+] Setting up Wazuh repository key..."
+echo "[+] Installing dependencies..."
+
+apt-get update -y
+apt-get install -y \
+    curl \
+    gnupg \
+    apt-transport-https \
+    expect
+
+# -----------------------------
+# Setup repo (safe GPG)
+# -----------------------------
+echo "[+] Setting up Wazuh repository..."
 
 mkdir -p /usr/share/keyrings
 
@@ -62,7 +74,7 @@ EOF
 echo "[+] Installing Wazuh Agent..."
 
 apt-get update -y
-apt-get install -y curl gnupg apt-transport-https wazuh-agent
+apt-get install -y wazuh-agent
 
 # -----------------------------
 # Configure manager
@@ -73,21 +85,29 @@ sed -i "s|<address>.*</address>|<address>${WAZUH_MANAGER}</address>|g" \
 /var/ossec/etc/ossec.conf
 
 # -----------------------------
-# Import key (REAL FIX)
+# Import key (AUTO-CONFIRM)
 # -----------------------------
 echo "[+] Importing agent key..."
 
-IMPORT_OUTPUT=$(/var/ossec/bin/manage_agents -i "$AGENT_KEY" 2>&1 || true)
+expect <<EOF
+set timeout 20
 
-echo "$IMPORT_OUTPUT"
+spawn /var/ossec/bin/manage_agents
 
-if echo "$IMPORT_OUTPUT" | grep -qi "Invalid authentication key"; then
-    echo ""
-    echo "[ERROR] Invalid Wazuh Agent Key"
-    exit 1
-fi
+expect "Choose your action:*"
+send "i\r"
 
-echo ""
+expect "Paste it here*"
+send "$AGENT_KEY\r"
+
+expect "Confirm adding it?(y/n):"
+send "y\r"
+
+expect "Added."
+
+expect eof
+EOF
+
 echo "[+] Agent key imported successfully"
 
 # -----------------------------
@@ -99,13 +119,13 @@ systemctl daemon-reload
 systemctl enable wazuh-agent --now
 systemctl restart wazuh-agent
 
-sleep 3
+sleep 5
 
 # -----------------------------
 # Verify
 # -----------------------------
 echo ""
-echo "[+] Checking status..."
+echo "[+] Checking service status..."
 
 if systemctl is-active --quiet wazuh-agent; then
     echo "[SUCCESS] Wazuh Agent is RUNNING"
@@ -115,6 +135,13 @@ else
 fi
 
 echo ""
+echo "[INFO] Checking manager connectivity..."
+tail -n 20 /var/ossec/logs/ossec.log | grep -Ei "Connected|connected|server|agent" || true
+
+echo ""
 echo "=========================================="
 echo "[DONE] Installation completed successfully"
+echo "=========================================="
+echo "[INFO] Manager: ${WAZUH_MANAGER}"
+echo "[INFO] Wait ~10–60 seconds for dashboard visibility"
 echo "=========================================="

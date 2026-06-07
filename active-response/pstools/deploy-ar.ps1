@@ -2,7 +2,8 @@
 # Master deployment script for Wazuh Active Response with PsTools
 $ErrorActionPreference = "SilentlyContinue"
 
-$repoBase = "https://raw.githubusercontent.com/yekyawhan/wazuh/master/wz-agent-windows/active-response/pstools"
+$branch = "git-home"
+$repoBase = "https://raw.githubusercontent.com/yekyawhan/wazuh/$branch/active-response/pstools"
 $sysDir = "C:\Program Files\Sysinternals"
 $arDir = "C:\Program Files (x86)\ossec-agent\active-response\bin"
 

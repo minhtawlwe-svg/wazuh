@@ -52,12 +52,13 @@ $files = @(
     "pssuspend_v2.ps1",
     "ps-forensics.ps1",
     "pssuspend.cmd",
-    "get-forensics.cmd"
+    "get-forensics.cmd",
+    "notify-balloon.ps1"
 )
 
 foreach ($f in $files) {
-    # Place .ps1 scripts in Sysinternals, and .cmd scripts in Wazuh AR bin
-    if ($f.EndsWith(".ps1")) { 
+    # Place core logic .ps1 scripts in Sysinternals, and wrapper .cmd / notification .ps1 scripts in Wazuh AR bin
+    if ($f.EndsWith(".ps1") -and $f -ne "notify-balloon.ps1") { 
         $dest = Join-Path $sysDir $f 
     } else { 
         $dest = Join-Path $arDir $f 
@@ -73,7 +74,8 @@ $required = @(
     "$sysDir\pssuspend_v2.ps1",
     "$sysDir\ps-forensics.ps1",
     "$arDir\pssuspend.cmd",
-    "$arDir\get-forensics.cmd"
+    "$arDir\get-forensics.cmd",
+    "$arDir\notify-balloon.ps1"
 )
 
 $allPassed = $true

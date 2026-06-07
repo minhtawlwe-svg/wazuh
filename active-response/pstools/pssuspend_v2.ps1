@@ -122,13 +122,13 @@ if (-not (Test-Path $pskill)) { $pskill = Join-Path $bin "pskill.exe" }
 $method = "none"
 
 # 1. Try Suspend first
-$null = RunTimed $pssuspend "-accepteula -nobanner $pidInt" 5000
+$null = RunTimed $pssuspend "/accepteula /nobanner $pidInt" 5000
 
 # 2. Try Kill with Retry Logic
 $attempts = 0
 while ($attempts -lt 3) {
     ArLog "Kill attempt $($attempts + 1) for PID $pidInt"
-    $null = RunTimed $pskill "-accepteula -nobanner -t $pidInt" 5000
+    $null = RunTimed $pskill "/accepteula /nobanner -t $pidInt" 5000
     Start-Sleep -Milliseconds 500
     if (-not (Get-Process -Id $pidInt -ErrorAction SilentlyContinue)) { 
         $method = "pskill"

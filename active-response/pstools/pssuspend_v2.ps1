@@ -65,17 +65,25 @@ function Notify($base) {
 # Repo-style balloon in the user session via PsExec -i.
 function Balloon() {
     try {
-        $psexec = Join-Path $bin "PsExec64.exe"
-        if (-not (Test-Path $psexec)) { $psexec = Join-Path $bin "PsExec.exe" }
+        # Dynamically find the active user session ID (Console or RDP)
+        $session = "1"
+        $sessionInfo = query user 2>&1
+        if ($sessionInfo -match '>(?<user>\S+)\s+(?<name>\S+)?\s+(?<id>\d+)\s+(?<state>\S+)') {
+            $session = $Matches['id']
+        }
+
+        $psexec = Join-Path $bin "psexec64.exe"
+        if (-not (Test-Path $psexec)) { $psexec = Join-Path $bin "psexec.exe" }
         
         $script = Join-Path "C:\Program Files (x86)\ossec-agent\active-response\bin" "notify-balloon.ps1"
         if ((Test-Path $psexec) -and (Test-Path $script)) {
-            $argLine = "/accepteula /nobanner -i -d powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
+            $argLine = "/accepteula /nobanner -i $session -d powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
             Start-Process -FilePath $psexec -ArgumentList $argLine -WindowStyle Hidden
+            ArLog "Balloon popup triggered for user session $session"
         } else {
             ArLog "Balloon skipped: PsExec or notify-balloon.ps1 not found."
         }
-    } catch { Log "balloon ERROR $_" }
+    } catch { ArLog "Balloon failed: $_" }
 }
 
 # Run a PsTool with a hard timeout so a hang can never jam execd.

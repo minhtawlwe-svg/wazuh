@@ -5,10 +5,11 @@ setlocal
 
 :: Wazuh AR passes input via stdin, so we pipe it to the PS script
 set SCRIPT_PATH="C:\Program Files\Sysinternals\ps-forensics.ps1"
+set PWSH_PATH="C:\Program Files\PowerShell\7\pwsh.exe"
 
-where pwsh >nul 2>nul
-if %ERRORLEVEL% EQU 0 (
-    pwsh.exe -ExecutionPolicy Bypass -File %SCRIPT_PATH%
+:: Check if PowerShell 7 exists at the explicit path and use it
+if exist %PWSH_PATH% (
+    %PWSH_PATH% -ExecutionPolicy Bypass -File %SCRIPT_PATH%
 ) else (
     powershell.exe -ExecutionPolicy Bypass -File %SCRIPT_PATH%
 )

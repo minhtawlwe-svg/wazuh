@@ -62,13 +62,18 @@ function Notify($base) {
     } catch { Log "notify ERROR $_" }
 }
 
-# Repo-style balloon in the user session via PsExec64 -i.
+# Repo-style balloon in the user session via PsExec -i.
 function Balloon() {
     try {
         $psexec = Join-Path $bin "PsExec64.exe"
+        if (-not (Test-Path $psexec)) { $psexec = Join-Path $bin "PsExec.exe" }
+        
         $script = Join-Path "C:\Program Files (x86)\ossec-agent\active-response\bin" "notify-balloon.ps1"
         if ((Test-Path $psexec) -and (Test-Path $script)) {
-            Start-Process -FilePath $psexec -ArgumentList "-accepteula -nobanner -i -d powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`"" -WindowStyle Hidden
+            $argLine = "/accepteula /nobanner -i -d powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
+            Start-Process -FilePath $psexec -ArgumentList $argLine -WindowStyle Hidden
+        } else {
+            ArLog "Balloon skipped: PsExec or notify-balloon.ps1 not found."
         }
     } catch { Log "balloon ERROR $_" }
 }

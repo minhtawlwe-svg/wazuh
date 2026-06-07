@@ -113,19 +113,34 @@ if (-not $procId) { ArLog "SKIPPED no process id in the alert"; ArLog "Ended"; e
 $pidInt = [int]$procId
 
 # Freeze with PsSuspend, then kill the tree with PsKill (each timeout-guarded); taskkill fallback.
-$pssuspend = Join-Path $bin "PsSuspend64.exe"
+$pssuspend = Join-Path $bin "pssuspend64.exe"
+if (-not (Test-Path $pssuspend)) { $pssuspend = Join-Path $bin "pssuspend.exe" }
+
 $pskill = Join-Path $bin "pskill64.exe"
+if (-not (Test-Path $pskill)) { $pskill = Join-Path $bin "pskill.exe" }
+
 $method = "none"
 
+# 1. Try Suspend first
 $null = RunTimed $pssuspend "-accepteula -nobanner $pidInt" 5000
-$null = RunTimed $pskill "-accepteula -nobanner -t $pidInt" 5000
 
-Start-Sleep -Milliseconds 300
-if (-not (Get-Process -Id $pidInt -ErrorAction SilentlyContinue)) { $method = "pssuspend+pskill" }
+# 2. Try Kill with Retry Logic
+$attempts = 0
+while ($attempts -lt 3) {
+    ArLog "Kill attempt $($attempts + 1) for PID $pidInt"
+    $null = RunTimed $pskill "-accepteula -nobanner -t $pidInt" 5000
+    Start-Sleep -Milliseconds 500
+    if (-not (Get-Process -Id $pidInt -ErrorAction SilentlyContinue)) { 
+        $method = "pskill"
+        break 
+    }
+    $attempts++
+}
 
 if ($method -eq "none") {
-    & "$env:SystemRoot\System32\taskkill.exe" /F /PID $pidInt 2>&1 | Out-Null
-    Start-Sleep -Milliseconds 300
+    ArLog "pskill failed, trying taskkill /F /T"
+    & "$env:SystemRoot\System32\taskkill.exe" /F /T /PID $pidInt 2>&1 | Out-Null
+    Start-Sleep -Milliseconds 500
     if (-not (Get-Process -Id $pidInt -ErrorAction SilentlyContinue)) { $method = "taskkill" }
 }
 

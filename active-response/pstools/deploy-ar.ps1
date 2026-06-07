@@ -20,7 +20,7 @@ Write-Host "--- Starting Wazuh AR Deployment ---" -ForegroundColor Cyan
 Write-Host "[1/5] Checking for PowerShell 7..."
 if (!(Get-Command pwsh -ErrorAction SilentlyContinue)) {
     Write-Host "Installing PowerShell 7..."
-    $msiUrl = "https://github.com/PowerShell/PowerShell/releases/download/v7.4.2/PowerShell-7.4.2-win-x64.msi"
+    $msiUrl = "https://github.com/PowerShell/PowerShell/releases/download/v7.6.2/PowerShell-7.6.2-win-x64.msi"
     $msiPath = Join-Path $env:TEMP "ps7.msi"
     Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
     Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /quiet /qn /norestart" -Wait

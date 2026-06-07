@@ -10,10 +10,17 @@ Run the following command in **PowerShell (Run as Administrator)** to deploy eve
 ```
 
 ## 📋 What this script does:
-1. Installs **PowerShell 7** (if not present).
-2. Downloads and extracts **Sysinternals PsTools** to `C:\Program Files\Sysinternals`.
-3. Deploys custom AR scripts to the Wazuh Agent directory.
-4. Verifies the installation and restarts the Wazuh Agent service.
+1. **Verifies Administrator Privileges:** Prevents permission errors by making sure the script runs as Admin.
+2. **Upgrades/Installs PowerShell 7:** Checks for `pwsh` and installs PowerShell v7.6.2 (MSI) silently if missing.
+3. **Creates System Folders:** 
+   - Generates `C:\Program Files\Sysinternals` (for security tools and PowerShell scripts).
+   - Generates `C:\Program Files (x86)\ossec-agent\active-response\bin` (if it does not exist on the agent).
+4. **Installs Sysinternals PsTools:** Downloads the official `PSTools.zip` from Microsoft, extracts all utility executables (like `PsSuspend64.exe`) directly into the `Sysinternals` directory, and cleans up the temporary zip file.
+5. **Downloads Active Response Wrapper Scripts:** 
+   - Places wrapper batch files (`pssuspend.cmd`, `get-forensics.cmd`) into Wazuh's Active Response `bin` folder.
+   - Places core PowerShell logic scripts (`pssuspend_v2.ps1`, `ps-forensics.ps1`) into the `C:\Program Files\Sysinternals` folder for better centralization and security.
+6. **Performs File Integrity Check:** Verifies all 5 required files are successfully downloaded and placed in the correct directories before continuing.
+7. **Restarts Wazuh Agent Service:** Detects the service names (`Wazuh` or `WazuhAgent`), restarts it cleanly, and falls back to restarting via the executable if the service database is not accessible.
 
 ## 🛠️ Step-by-Step Configuration (Manual)
 
@@ -54,8 +61,9 @@ Define when these commands should be executed based on alert IDs or groups:
 ```
 
 ### 3. File Locations on Agent
-- **Scripts:** `C:\Program Files (x86)\ossec-agent\active-response\bin\`
-- **PsTools:** `C:\Program Files\Sysinternals\`
+- **Active Response Wrapper Cmds:** `C:\Program Files (x86)\ossec-agent\active-response\bin\pssuspend.cmd`, `C:\Program Files (x86)\ossec-agent\active-response\bin\get-forensics.cmd`
+- **Core PowerShell Logic Scripts:** `C:\Program Files\Sysinternals\pssuspend_v2.ps1`, `C:\Program Files\Sysinternals\ps-forensics.ps1`
+- **Sysinternals Executables:** `C:\Program Files\Sysinternals\PsSuspend64.exe` (and other PsTools utilities)
 
 ---
 *Maintained by Ko Ye*

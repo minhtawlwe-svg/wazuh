@@ -56,10 +56,12 @@ $files = @(
 )
 
 foreach ($f in $files) {
-    # Custom mapping logic as per Ko Ye's request
-    if ($f -eq "pssuspend_v2.ps1") { $dest = Join-Path $sysDir $f }
-    elseif ($f -eq "ps-forensics.ps1") { $dest = Join-Path $arDir $f }
-    else { $dest = Join-Path $arDir $f }
+    # Place .ps1 scripts in Sysinternals, and .cmd scripts in Wazuh AR bin
+    if ($f.EndsWith(".ps1")) { 
+        $dest = Join-Path $sysDir $f 
+    } else { 
+        $dest = Join-Path $arDir $f 
+    }
 
     Write-Host "Downloading $f to $dest ..."
     Invoke-WebRequest -Uri "$repoBase/$f" -OutFile $dest
@@ -69,9 +71,9 @@ Write-Host "[4/5] Verifying files..."
 $required = @(
     "$sysDir\PsSuspend64.exe",
     "$sysDir\pssuspend_v2.ps1",
+    "$sysDir\ps-forensics.ps1",
     "$arDir\pssuspend.cmd",
-    "$arDir\get-forensics.cmd",
-    "$arDir\ps-forensics.ps1"
+    "$arDir\get-forensics.cmd"
 )
 
 $allPassed = $true

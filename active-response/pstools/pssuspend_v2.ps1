@@ -65,16 +65,19 @@ function Notify($base) {
 # Repo-style balloon in the user session via PsExec -i.
 function Balloon() {
     try {
-        # Dynamically find the active user session ID (Console or RDP)
+        # Dynamically find the active user session ID (Console or RDP).
+        # The native `query user` command lives in cmd.exe, not PowerShell.
+        # We invoke it via cmd /c and parse the output safely.
         $session = "1"
-        $sessionInfo = query user 2>&1
-        if ($sessionInfo -match '>(?<user>\S+)\s+(?<name>\S+)?\s+(?<id>\d+)\s+(?<state>\S+)') {
-            $session = $Matches['id']
+        $sessionInfo = & cmd /c "query user" 2>&1
+        if ($sessionInfo -match '^\s*([^\s]+)\s+([^\s]+)\s+(\d+)\s+') {
+            # Captured groups: username, state, ID (3rd group is session ID)
+            $session = $Matches[3]
         }
 
         $psexec = Join-Path $bin "psexec64.exe"
         if (-not (Test-Path $psexec)) { $psexec = Join-Path $bin "psexec.exe" }
-        
+
         $script = Join-Path "C:\Program Files (x86)\ossec-agent\active-response\bin" "notify-balloon.ps1"
         if ((Test-Path $psexec) -and (Test-Path $script)) {
             $argLine = "/accepteula /nobanner -i $session -d powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""

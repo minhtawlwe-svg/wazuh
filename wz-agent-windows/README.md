@@ -1,5 +1,13 @@
 # 🚀 Wazuh Windows Agent - Production Deployment Script
 
+### 🔥 1. One-Line Installation (Recommended)
+
+### Run this in **PowerShell (Admin)**:
+
+```powershell
+iwr -useb https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-windows/production-wz-agent-install.ps1 | iex
+
+
 This repository provides an automated PowerShell script to install and configure the **Wazuh Agent on Windows endpoints** in a SOC/EDR environment.
 
 It supports:
@@ -27,12 +35,17 @@ It supports:
 - MSI Source: Wazuh official repository (4.x latest)
 
 ---
-
-## 📥 Installation Methods
-
-### 🔥 1. One-Line Installation (Recommended)
-
-### Run this in **PowerShell (Admin)**:
+# Sysmon add config
+- notepad openwitth admin
+- C:\Program Files (x86)\ossec-agent\ossec.conf
 
 ```powershell
-iwr -useb https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-windows/production-wz-agent-install.ps1 | iex
+<localfile>
+    <location>active-response\active-responses.log</location>
+    <log_format>syslog</log_format>
+  </localfile>
+
+  <localfile>
+    <location>Microsoft-Windows-Sysmon/Operational</location>
+    <log_format>eventchannel</log_format>
+  </localfile>

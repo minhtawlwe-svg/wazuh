@@ -6,7 +6,7 @@
 
 ```powershell
 iwr -useb https://github.com/yekyawhan/wazuh/raw/refs/heads/git-home/wz-agent-windows/production-wz-agent-install.ps1 | iex
-
+```
 
 This repository provides an automated PowerShell script to install and configure the **Wazuh Agent on Windows endpoints** in a SOC/EDR environment.
 
@@ -49,3 +49,4 @@ It supports:
     <location>Microsoft-Windows-Sysmon/Operational</location>
     <log_format>eventchannel</log_format>
   </localfile>
+```

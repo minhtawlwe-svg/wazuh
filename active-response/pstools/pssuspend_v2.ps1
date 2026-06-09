@@ -78,7 +78,7 @@ function Balloon() {
         $script = Join-Path "C:\Program Files (x86)\ossec-agent\active-response\bin" "notify-balloon.ps1"
  
         if ((Test-Path $psexec) -and (Test-Path $script)) {
-            $argLine = "/accepteula /nobanner -i $session -d powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
+            $argLine = "/accepteula /nobanner -i $session -d cmd.exe /c start `"`" /min powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
  
             Start-Process -FilePath $psexec -ArgumentList $argLine -WindowStyle Hidden
  

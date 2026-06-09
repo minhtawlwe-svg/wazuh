@@ -1,4 +1,5 @@
 # pssuspend_v2.ps1
+# 9-jun-2026 modified
 $ErrorActionPreference = "SilentlyContinue"
  
 # Define binary directory and log files relative to script execution context

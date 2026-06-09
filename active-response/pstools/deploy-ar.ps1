@@ -94,25 +94,11 @@ if (-not $allPassed) {
     Exit
 }
 
-# 5. Restart Wazuh Agent
-Write-Host "[5/5] Restarting Wazuh Agent..."
-if (Get-Service -Name "Wazuh" -ErrorAction SilentlyContinue) {
-    Restart-Service -Name "Wazuh" -Force
-    Write-Host "Wazuh Agent restarted successfully." -ForegroundColor Green
-} elseif (Get-Service -Name "WazuhAgent" -ErrorAction SilentlyContinue) {
-    Restart-Service -Name "WazuhAgent" -Force
-    Write-Host "Wazuh Agent restarted successfully." -ForegroundColor Green
-} else {
-    # Fallback to manual exe call
-    Write-Host "Wazuh Service not found in Services. Trying executable restart..." -ForegroundColor Yellow
-    if (Test-Path "C:\Program Files (x86)\ossec-agent\wazuh-agent.exe") {
-        & "C:\Program Files (x86)\ossec-agent\wazuh-agent.exe" stop
-        Start-Sleep -Seconds 2
-        & "C:\Program Files (x86)\ossec-agent\wazuh-agent.exe" start
-        Write-Host "Wazuh Agent executable restarted." -ForegroundColor Green
-    } else {
-        Write-Host "Wazuh Agent executable not found. Please restart it manually." -ForegroundColor Red
-    }
-}
+# 5. Force Restart Windows
+Write-Host "[5/5] Restarting Windows..." -ForegroundColor Yellow
+Write-Host "System will restart in 10 seconds..." -ForegroundColor Red
 
-Write-Host "--- Deployment Finished Successfully ---" -ForegroundColor Cyan
+Start-Sleep -Seconds 10
+
+# Force reboot immediately
+shutdown.exe /r /f /t 0

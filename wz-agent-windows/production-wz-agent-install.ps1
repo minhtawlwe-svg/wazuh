@@ -5,7 +5,7 @@ Author: SOC Automation
 
 param(
     [string]$WazuhManager = "<MANAGER_IP>",
-    [string]$WazuhVersionUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-latest.msi",
+    [string]$WazuhVersionUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.5-1.msi",
     [switch]$ForceReinstall,
     [string]$LogFile = "$env:TEMP\wazuh-install.log"
 )

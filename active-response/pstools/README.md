@@ -34,7 +34,7 @@ Ensure you have the custom software list registered in your manager's `ossec.con
   <list>etc/lists/software_vendors</list>
 </ruleset>
 ```
-### SYSMON LOGS
+### AGENT config SYSMON LOGS
 ```
 <localfile>
   <location>Microsoft-Windows-Sysmon/Operational</location>
@@ -64,6 +64,13 @@ Add the following command blocks to your manager's `ossec.conf` file to define t
 Configure when the manager triggers these actions on the agents by adding the following block to `ossec.conf`:
 
 ```xml
+<command>
+  <name>pssuspend</name>
+  <executable>pssuspend.cmd</executable>
+  <timeout_allowed>yes</timeout_allowed>
+</command>
+
+
 <!-- Trigger pssuspend (Kill app) when non-allowed software is run on Desktop/elsewhere (Rule 100500) -->
 <active-response>
   <disabled>no</disabled>
@@ -72,21 +79,6 @@ Configure when the manager triggers these actions on the agents by adding the fo
   <rules_id>100500</rules_id>
 </active-response>
 
-<!-- Trigger pssuspend (Kill app) when non-allowed software is run from Downloads (Rule 100599) -->
-<active-response>
-  <disabled>no</disabled>
-  <command>pssuspend</command>
-  <location>local</location>
-  <rules_id>100599</rules_id>
-</active-response>
-
-<!-- Trigger get-forensics (Collect data) only when non-allowed software is run from Downloads (Rule 100599) -->
-<active-response>
-  <disabled>no</disabled>
-  <command>get-forensics</command>
-  <location>local</location>
-  <rules_id>100599</rules_id>
-</active-response>
 ```
 ### 4. Add Custom Rules to `local_rules.xml`
 Add these custom rules inside your `/var/ossec/etc/rules/local_rules.xml` file to process Sysmon Event ID 1 (Process creation) events:
@@ -112,16 +104,8 @@ Add these custom rules inside your `/var/ossec/etc/rules/local_rules.xml` file t
     <description>Unallowed software executed from a Downloads directory.</description>
     <group>sysmon_event1,software_policy,downloads_threat</group>
   </rule>
-
-  <!-- Rule 100599: Target Rule - Triggering Forensics -->
-  <rule id="100599" level="12">
-    <if_sid>100501</if_sid>
-    <description>Highly suspicious unallowed software from Downloads. Triggering Forensics.</description>
-    <group>sysmon_event1,software_policy,downloads_threat</group>
-  </rule>
 </group>
 ```
-
 
 
 ### 5. File Locations on Agent

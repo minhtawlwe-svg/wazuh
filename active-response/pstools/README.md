@@ -34,6 +34,14 @@ Ensure you have the custom software list registered in your manager's `ossec.con
   <list>etc/lists/software_vendors</list>
 </ruleset>
 ```
+### SYSMON LOGS
+```
+<localfile>
+  <location>Microsoft-Windows-Sysmon/Operational</location>
+  <log_format>eventchannel</log_format>
+</localfile>
+```
+
 *(Also create the CDB list file under `/var/ossec/etc/lists/software_vendors` and add allowed vendor names, e.g., `Microsoft Corporation:`)*
 
 ### 2. Add Command Configurations to Wazuh Manager

@@ -1,0 +1,41 @@
+<group name="unwanted software,">
+  <!-- Rules 100500 - 100999: Exceptions/Rule Level Mod -->
+
+  <!-- Rule 100500: Base Rule - Unallowed Software -->
+  <rule id="100500" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/software_vendors</list>
+    <description>Unauthorized software started:$(win.eventdata.product)</description>
+    <mitre>
+      <id>T1036</id>
+    </mitre>
+    <options>no_full_log</options>
+  </rule>
+  
+  
+ <rule id="100501" level="12">
+    <if_sid>100500</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <field name="win.eventdata.company">^N/A$</field>
+    <description>Unsigned executable started from user space.</description>
+    <group>sysmon_event1,software_policy</group>
+    <options>no_full_log</options>
+</rule>
+---
+# This is Optional
+  
+  <!-- Rule 100502: software-policy loop fix (2026-06-08). Exempt the active
+       response's OWN PsTools in C:\Program Files\Sysinternals\ so launching
+       pssuspend64/pskill64 to kill a blocked app does NOT re-trigger 100500
+       and storm the AR. Matched rule becomes 100502 (not 100500), so the
+       active response bound to 100500 no longer fires on these. Path-anchored:
+       an attacker's PsTool run from anywhere else is still caught by 100500. -->
+       
+  <rule id="100502" level="3">
+    <if_sid>100500</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\\\Sysinternals\\\\ps(suspend|kill|exec|info|list)\d*\.exe$</field>
+    <description>Software-policy PsTools (own active-response tooling) - allowed, no active response.</description>
+    <options>no_full_log</options>
+    <group>sysmon_event1,software_policy,no_active_response</group>
+  </rule>

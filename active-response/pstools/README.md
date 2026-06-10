@@ -52,8 +52,35 @@ Add the following command blocks to your manager's `ossec.conf` file to define t
   <timeout_allowed>no</timeout_allowed>
 </command>
 ```
+### 3. Add Active Response Mappings to `ossec.conf`
+Configure when the manager triggers these actions on the agents by adding the following block to `ossec.conf`:
 
-### 3. Add Custom Rules to `local_rules.xml`
+```xml
+<!-- Trigger pssuspend (Kill app) when non-allowed software is run on Desktop/elsewhere (Rule 100500) -->
+<active-response>
+  <disabled>no</disabled>
+  <command>pssuspend</command>
+  <location>local</location>
+  <rules_id>100500</rules_id>
+</active-response>
+
+<!-- Trigger pssuspend (Kill app) when non-allowed software is run from Downloads (Rule 100599) -->
+<active-response>
+  <disabled>no</disabled>
+  <command>pssuspend</command>
+  <location>local</location>
+  <rules_id>100599</rules_id>
+</active-response>
+
+<!-- Trigger get-forensics (Collect data) only when non-allowed software is run from Downloads (Rule 100599) -->
+<active-response>
+  <disabled>no</disabled>
+  <command>get-forensics</command>
+  <location>local</location>
+  <rules_id>100599</rules_id>
+</active-response>
+```
+### 4. Add Custom Rules to `local_rules.xml`
 Add these custom rules inside your `/var/ossec/etc/rules/local_rules.xml` file to process Sysmon Event ID 1 (Process creation) events:
 
 ```xml
@@ -87,34 +114,7 @@ Add these custom rules inside your `/var/ossec/etc/rules/local_rules.xml` file t
 </group>
 ```
 
-### 4. Add Active Response Mappings to `ossec.conf`
-Configure when the manager triggers these actions on the agents by adding the following block to `ossec.conf`:
 
-```xml
-<!-- Trigger pssuspend (Kill app) when non-allowed software is run on Desktop/elsewhere (Rule 100500) -->
-<active-response>
-  <disabled>no</disabled>
-  <command>pssuspend</command>
-  <location>local</location>
-  <rules_id>100500</rules_id>
-</active-response>
-
-<!-- Trigger pssuspend (Kill app) when non-allowed software is run from Downloads (Rule 100599) -->
-<active-response>
-  <disabled>no</disabled>
-  <command>pssuspend</command>
-  <location>local</location>
-  <rules_id>100599</rules_id>
-</active-response>
-
-<!-- Trigger get-forensics (Collect data) only when non-allowed software is run from Downloads (Rule 100599) -->
-<active-response>
-  <disabled>no</disabled>
-  <command>get-forensics</command>
-  <location>local</location>
-  <rules_id>100599</rules_id>
-</active-response>
-```
 
 ### 5. File Locations on Agent
 - **Active Response Wrapper Cmds:** `C:\Program Files (x86)\ossec-agent\active-response\bin\pssuspend.cmd`, `C:\Program Files (x86)\ossec-agent\active-response\bin\get-forensics.cmd`

@@ -1,5 +1,4 @@
-# pssuspend_v2.ps1
-# 9-jun-2026 modified
+# pssuspend_v3.ps1
 $ErrorActionPreference = "SilentlyContinue"
  
 # Define binary directory and log files relative to script execution context
@@ -98,11 +97,26 @@ function Balloon() {
 # Run a PsTool with a hard timeout so a hang can never jam execd.
 function RunTimed($exe, $argline, $timeoutMs) {
     try {
-        $p = Start-Process -FilePath $exe -ArgumentList $argline -WindowStyle Hidden -PassThru
-        if ($p.WaitForExit($timeoutMs)) { return $true }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $exe
+        $psi.Arguments = $argline
+        $psi.CreateNoWindow = $true
+        $psi.UseShellExecute = $false
+        $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+
+        $p = [System.Diagnostics.Process]::Start($psi)
+
+        if ($p.WaitForExit($timeoutMs)) {
+            return $true
+        }
+
         try { $p.Kill() } catch {}
         return $false
-    } catch { return $false }
+    }
+    catch {
+        ArLog ("RunTimed failed for {0}: {1}" -f $exe, $_.Exception.Message)
+        return $false
+    }
 }
  
 # execd keeps stdin open -> ReadLine ONE line, not ReadToEnd (which hangs).
@@ -120,6 +134,25 @@ $company = $ed.company;
 if ([string]::IsNullOrWhiteSpace($company)) { $company = "(unsigned / no publisher)" }
 $base = "";
 if ($image) { $base = [System.IO.Path]::GetFileName($image).ToLower() }
+
+# Parent process only popup (ignore same-app child processes)
+$isChild = $false
+
+$parentImage = ""
+if ($ed.parentImage) {
+    $parentImage = [System.IO.Path]::GetFileName($ed.parentImage).ToLower()
+}
+
+$currentImage = ""
+if ($image) {
+    $currentImage = [System.IO.Path]::GetFileName($image).ToLower()
+}
+
+# Treat as child only if same executable spawned itself
+if ($parentImage -and $currentImage -and ($parentImage -eq $currentImage)) {
+    $isChild = $true
+    ArLog ("Child process detected app='{0}' parent='{1}'" -f $currentImage, $parentImage)
+}
  
 ArLog "Starting"
 ArLog ("BLOCKED app='{0}' publisher='{1}' user='{2}' pid={3}" -f $base, $company, $user, $procId)
@@ -161,7 +194,11 @@ while ($attempts -lt 3) {
  
 if ($method -eq "none") {
     ArLog "pskill failed, trying taskkill /F /T"
-& "$env:SystemRoot\System32\taskkill.exe" /F /T /PID $pidInt 2>&1 | Out-Null
+Start-Process `
+        -FilePath "$env:SystemRoot\System32\taskkill.exe" `
+        -ArgumentList "/F /T /PID $pidInt" `
+        -WindowStyle Hidden `
+        -Wait
     Start-Sleep -Milliseconds 500
     if (-not (Get-Process -Id $pidInt -ErrorAction SilentlyContinue)) { $method = "taskkill" }
 }
@@ -172,8 +209,12 @@ $action = if ($method -eq "none") { "kill_failed" } else { "killed" }
 ArLog ("RESULT app='{0}' pid={1} -> {2} (how: {3})" -f $base, $pidInt, $status, $method)
 Log "result pid=$pidInt base=$base method=$method company=$company"
 Forensic $action $method
-Notify $base
-Balloon
+# Popup only for parent process
+if (-not $isChild) {
+    Balloon
+} else {
+    ArLog ("Popup skipped for child process ''{0}''" -f $base)
+}
  
 ArLog "Ended"
 exit 0

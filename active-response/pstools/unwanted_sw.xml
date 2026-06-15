@@ -1,0 +1,253 @@
+<group name="unwanted software,">
+  <!-- Rules 100500 - 100999: Exceptions/Rule Level Mod -->
+
+  <!-- Rule 100500: Base Rule - Unallowed Software -->
+  <rule id="100500" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" negate="yes" type="pcre2">(?i)^((FIN|HR|CC|CYS|SSD|DSS|PRO|IPC|AON|OSS|IES|CMO|LEG|ADM|INO|))</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/software_vendors</list>
+    <description>Unauthorized software started:$(win.eventdata.product)</description>
+    <mitre>
+      <id>T1036</id>
+    </mitre>
+    <options>no_full_log</options>
+  </rule>
+  
+
+  
+ <rule id="100501" level="12">
+    <if_sid>100500</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <field name="win.eventdata.company">^N/A$</field>
+    <description>Unsigned executable started from user space.</description>
+    <group>sysmon_event1,software_policy</group>
+    <options>no_full_log</options>
+</rule>
+
+       <!-- Rule 100420/100421: turn the endpoint AR's forensic JSON
+       (software-policy-events.log, log_format json) into a VISIBLE kill alert.
+       Fields come from the flat JSON the AR writes: sp_event, sp_action, sp_base,
+       sp_agent, sp_company, sp_method, sp_sha256, sp_image, sp_user. -->
+       
+
+
+  <rule id="100421" level="10">
+    <if_sid>100420</if_sid>
+    <field name="sp_action">kill_failed</field>
+    <description>Software Policy: FAILED to kill $(sp_base) on $(sp_agent) - NEEDS ATTENTION</description>
+    <group>software_policy,active_response,</group>
+  </rule>
+
+</group>
+
+<group name="ADMIN,">
+
+  <rule id="100510" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^ADM\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/ADM-sw</list>
+    <description>Unauthorized software on ADMIN host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+
+<group name="HR,">
+  <rule id="100520" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^HR\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/HR-sw</list>
+    <description>Unauthorized software on HR host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+
+
+<group name="LEGAL,">
+  <rule id="100530" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^LEG\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/LEG-sw</list>
+    <description>Unauthorized software on LEGAL host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+
+<group name="PROCUREMENT,">
+  <rule id="100540" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^PRO\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/PRO-sw</list>
+    <description>Unauthorized software on PROCUREMENT host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+
+
+<group name="CALLCENTER,">
+  <rule id="100550" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^CC\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/CC-sw</list>
+    <description>Unauthorized software on CALLCENTER host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="INO,">
+  <rule id="100560" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^INO\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/INO-sw</list>
+    <description>Unauthorized software on INO host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="SOFTWARE DEVELOPMENT,">
+  <rule id="100570" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^SDD\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/SDD-sw</list>
+    <description>Unauthorized software on SOFTWARE DEVELOPMENT host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="OSS,">
+  <rule id="100580" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^OSS\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/OSS-sw</list>
+    <description>Unauthorized software on OSS host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="INFRA,">
+  <rule id="100590" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^IPC\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/IPC-sw</list>
+    <description>Unauthorized software on INFRA host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="BILLING,">
+  <rule id="100600" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^BIL\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/BIL-sw</list>
+    <description>Unauthorized software on BILING host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="COMMERCIAL,">
+  <rule id="100610" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^COM\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/COM-sw</list>
+    <description>Unauthorized software on COMMERCIAL host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="CYBERSECURITY,">
+  <rule id="100620" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^CYS\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/CYS-sw</list>
+    <description>Unauthorized software on CYBERSECURITY host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="SYSTEM SOLUTION,">
+  <rule id="100630" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^DSS\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/DSS-sw</list>
+    <description>Unauthorized software on SYSTEM SOLUTION host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+  <group name="FINANACE,">
+  <rule id="100640" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^FIN\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/FIN-sw</list>
+    <description>Unauthorized software on FINANACE host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+   <group name="AON,">
+  <rule id="100650" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^AON\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/AON-sw</list>
+    <description>Unauthorized software on AON host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+   <group name="DIGITAL TRANSFORMATION,">
+  <rule id="100660" level="8">
+    <if_sid>61603</if_sid>
+    <field name="win.system.computer" type="pcre2">(?i)^CEO\d*(-|$)</field>
+    <field name="win.eventdata.image" type="pcre2">(?i).*\\Users\\.*</field>
+    <list field="win.eventdata.company" lookup="not_match_key">etc/lists/CEO-sw</list>
+    <description>Unauthorized software on DIGITAL TRANSFORMATION host:$(win.eventdata.product)</description>
+    <mitre><id>T1036</id></mitre>
+    <options>no_full_log</options>
+  </rule>
+  </group>
+  
+   <group name="test_json">
+
+  <rule id="100420" level="10">
+  <decoded_as>json</decoded_as>
+  <field name="sp_event">software_policy</field>
+  <description>Software Policy: $(sp_base) was $(sp_action) on $(sp_agent)</description>
+</rule>
+
+</group>
+ 
+  
+  
+  
+
+

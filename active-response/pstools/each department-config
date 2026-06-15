@@ -1,0 +1,17 @@
+<agent_config>
+
+  <labels>
+    <label key="dept">HR</label>
+  </labels>
+
+</agent_config>
+
+<agent_config os="Windows">
+
+  <!-- Software-policy kill log -> manager rule 100420 -->
+  <localfile>
+    <location>C:\Program Files\Sysinternals\software-policy-events.log</location>
+    <log_format>json</log_format>
+  </localfile>
+
+</agent_config>

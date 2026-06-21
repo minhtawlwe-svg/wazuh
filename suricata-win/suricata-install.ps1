@@ -60,7 +60,7 @@ function Write-Log {
     param([string]$Message)
     $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
     Write-Host $line
-    Add-Content -Path $InstallLog -Value $line -Encoding UTF8NoBOM
+    [System.IO.File]::AppendAllText($InstallLog, "$line`r`n", $Utf8NoBom)
 }
 
 function New-Directory {
@@ -564,7 +564,8 @@ $MaintLog = Join-Path $DataRoot "maintenance.log"
 
 function Write-MaintLog {
     param([string]$Message)
-    Add-Content -Path $MaintLog -Value ("{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message) -Encoding UTF8NoBOM
+    $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
+    [System.IO.File]::AppendAllText($MaintLog, "$line`r`n", $Utf8NoBom)
 }
 
 function Get-SuricataExe {

@@ -96,5 +96,5 @@ Creates these paths under `C:\ProgramData\Suricata\`:
 ## One-line installer
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $branch="git-home"; $url="https://raw.githubusercontent.com/yekyawhan/wazuh/$branch/active-response/pstools/deploy-ar.ps1"; Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\deploy-ar.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\deploy-ar.ps1"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $branch="git-home"; $url="https://raw.githubusercontent.com/yekyawhan/wazuh/$branch/suricata-win/suricata-install.ps1"; Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\suricata-install.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\suricata-install.ps1"
 ```

@@ -92,7 +92,6 @@ Runs as **root** with `set -euo pipefail`. Logs to `/var/log/suricata-install.lo
 
 | Flag | Default |
 | --- | --- |
-| `-WazuhManager` | (empty — agent assumed installed) |
 | `-Interface` | auto-detect (first physical, sorted by speed) |
 | `-WazuhConf` | `/var/ossec/etc/ossec.conf` |
 | `-SuricataRepoUrl` | (unused — Suricata comes from `ppa:oisf/suricata-stable` on Debian/Ubuntu and EPEL on RHEL family) |
@@ -103,18 +102,25 @@ Runs as **root** with `set -euo pipefail`. Logs to `/var/log/suricata-install.lo
 
 ## One-line installer
 
-**Default** (auto-detect everything; agent must already be installed):
+**Default** (auto-detect everything; Wazuh agent must already be installed and enrolled):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-linux/install.sh \
-  | sudo bash -s -- -WazuhManager <MANAGER_IP>
+  | sudo bash
 ```
 
 **Pin a capture interface** (e.g. server with multiple NICs):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-linux/install.sh \
-  | sudo bash -s -- -WazuhManager <MANAGER_IP> -Interface eth0
+  | sudo bash -s -- -Interface eth0
+```
+
+**Skip the Wazuh ossec.conf patch** (pure-Suricata, no agent binding):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-linux/install.sh \
+  | sudo bash -s -- -SkipWazuhConfig
 ```
 
 **Bring-your-own installer** (clone repo, then run locally):
@@ -123,7 +129,7 @@ curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-l
 git clone https://github.com/yekyawhan/wazuh.git
 cd wazuh/suricata-linux
 chmod +x install.sh uninstall.sh
-sudo ./install.sh -WazuhManager <MANAGER_IP>
+sudo ./install.sh
 ```
 
 ## Uninstall

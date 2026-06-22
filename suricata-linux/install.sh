@@ -12,7 +12,6 @@ IFS=$'\n\t'
 # -------------------------------------
 # Defaults (override via -<Flag> args)
 # -------------------------------------
-WAZUH_MANAGER=""
 INTERFACE_OVERRIDE=""
 WAZUH_CONF="/var/ossec/etc/ossec.conf"
 SURICATA_YAML="/etc/suricata/suricata.yaml"
@@ -51,7 +50,6 @@ usage() {
     cat <<EOF
 Usage: sudo ./install.sh [options]
 
-  -WazuhManager <ip>        Wazuh manager IP (recorded but agent not installed here)
   -Interface <name>         Override auto-detected capture interface
   -WazuhConf <path>         ossec.conf path (default: /var/ossec/etc/ossec.conf)
   -SuricataRepoUrl <url>    OISF repo base URL
@@ -64,8 +62,8 @@ Usage: sudo ./install.sh [options]
   -h | -Help                Show this help
 
 Examples:
-  sudo ./install.sh -WazuhManager <MANAGER_IP>
-  sudo ./install.sh -WazuhManager <MANAGER_IP> -Interface eth0
+  sudo ./install.sh
+  sudo ./install.sh -Interface eth0
 EOF
 }
 
@@ -74,7 +72,6 @@ EOF
 # -------------------------------------
 while [ $# -gt 0 ]; do
     case "$1" in
-        -WazuhManager)        WAZUH_MANAGER="${2:-}"; shift 2 ;;
         -Interface)           INTERFACE_OVERRIDE="${2:-}"; shift 2 ;;
         -WazuhConf)           WAZUH_CONF="${2:-}"; shift 2 ;;
         -SuricataRepoUrl)     SURICATA_REPO_URL="${2:-}"; shift 2 ;;
@@ -98,7 +95,7 @@ fi
 
 : > "$INSTALL_LOG"
 log "=== Suricata Linux installer start ==="
-log "Args: WAZUH_MANAGER=${WAZUH_MANAGER} INTERFACE=${INTERFACE_OVERRIDE:-auto} MAX_EVE_BYTES=${MAX_EVE_BYTES} KEEP=${KEEP_ROTATED_LOGS} DAILY=${DAILY_TASK_TIME}"
+log "Args: INTERFACE=${INTERFACE_OVERRIDE:-auto} MAX_EVE_BYTES=${MAX_EVE_BYTES} KEEP=${KEEP_ROTATED_LOGS} DAILY=${DAILY_TASK_TIME}"
 
 # -------------------------------------
 # Pre-flight: distro detection

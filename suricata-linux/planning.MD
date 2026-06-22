@@ -7,7 +7,7 @@ Automated Suricata deployment on Linux (Debian/Ubuntu + RHEL/Fedora/Rocky) with 
 - **Detector**: Suricata 7.0.x (Linux binary from OISF official repo)
 - **Capture mode**: AF_PACKET (passive IDS, no iptables/nftables changes)
 - **Rules**: Emerging Threats Open (ET Open) — direct tarball download (version-matched)
-- **Integration**: Wazuh Agent (assumed pre-installed; installer patches `ossec.conf`)
+- **Integration**: Wazuh Agent (assumed pre-installed; installer patches `ossec.conf`; skip via `-SkipWazuhConfig`)
 - **Service supervision**: systemd unit `suricata.service` (OISF package ships it)
 - **Maintenance**: systemd timer `suricata-maintenance.timer` (daily) + logrotate
 - **Pipeline**: Suricata → eve.json → Wazuh Agent → Wazuh Manager → SOC Pipeline

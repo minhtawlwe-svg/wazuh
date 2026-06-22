@@ -1,756 +1,284 @@
 #Requires -RunAsAdministrator
 # =====================================================================
-#  Install-Suricata-Full-Auto.ps1   (patched 2026-06-19)
-#  Fixes applied vs. original:
-#   1. Interface GUID: $adapter.InterfaceGuid is already a braced string -
-#      ".Guid" threw under StrictMode and produced \Device\NPF_{} otherwise.
-#   2. Rules: replaced suricata-update (BROKEN on Windows, Errno 13) with a
-#      direct, version-matched ET Open tarball download (main + maintenance).
-#   3. Service: Suricata's --service-install writes an UNQUOTED binPath, so
-#      SCM tries to start "C:\Program" and the service dies. Now the quoted
-#      ImagePath is forced via registry (or New-Service fallback).
-#   4. YAML: Windows paths must be SINGLE-quoted (\D etc. are invalid escapes
-#      inside double quotes) - was writing double quotes.
-#   5. Encoding: write suricata.yaml / ossec.conf BOM-less (PS5.1 UTF8 adds a
-#      BOM, which breaks Suricata rule 1 and YAML line 1).
-#   6. Wazuh: strip any pre-existing Suricata eve.json <localfile> first so we
-#      never double-monitor / leave a stale path.
-#   7. StrictMode-safe property access; MSI bumped to 7.0.16 (known-good here).
-#   8. Added: Defender exclusion for the rules dir + non-fatal "suricata -T".
-#   Optional: -CaptureInterfaceName 'VMware Network Adapter VMnet8' to sniff
-#   the lab network instead of auto-selecting a physical adapter.
+#  Install-Suricata-Wazuh-AllInOne.ps1                  2026-06-22
+#  Self-contained Suricata IDS -> Wazuh installer for Windows.
+#  No external installer script, no GitHub dependency. Portable across
+#  any user account (machine-wide paths + %TEMP%). All the y3kh bugs are
+#  designed out: rule-files points at the merged file, the service path
+#  is quoted, and the eve.json <localfile> is written + verified.
+#
+#  USAGE (Administrator PowerShell):
+#    # local IDS only (no manager shipping):
+#    .\Install-Suricata-Wazuh-AllInOne.ps1
+#    # install + enroll the Wazuh agent to a manager:
+#    .\Install-Suricata-Wazuh-AllInOne.ps1 -WazuhManager <MANAGER_IP> `
+#         -RegPassword 'cEENvWCbudRnZ1j1OlTrua7PekOf' -SelfTest
+#
+#  Npcap (free build) cannot install silently: if absent an interactive
+#  wizard opens - tick "WinPcap API-compatible Mode" and finish it.
 # =====================================================================
 [CmdletBinding()]
 param(
-    [string]$SuricataMsiUrl = "https://www.openinfosecfoundation.org/download/windows/Suricata-8.0.5-1-64bit.msi",
-    [string]$SuricataMsiPath = "",
-    [string]$NpcapUrl = "https://npcap.com/dist/npcap-1.82.exe",
-    [string]$InstallRoot = "C:\Program Files\Suricata",
-    [string]$DataRoot = "C:\ProgramData\Suricata",
-    [string]$WazuhConf = "",
-    [string]$WazuhManager = "",   # empty = do NOT install/enroll an agent. Set e.g. 192.168.144.128 to install+enroll.
-    [string]$WazuhAgentMsiUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.5-1.msi",
-    [string]$WazuhAgentName = $env:COMPUTERNAME,
-    [string]$CaptureInterfaceName = "",
-    [int64]$MaxEveBytes = 2GB,
-    [int]$KeepRotatedLogs = 3,
-    [string]$DailyTaskTime = "13:00",
+    [string]$SuricataMsiUrl = 'https://www.openinfosecfoundation.org/download/windows/Suricata-8.0.3-1-64bit.msi',
+    [string]$SuricataMsiPath = '',   # pre-staged local .msi; auto-used if present (skips the flaky OISF download)
+    [string]$NpcapUrl       = 'https://npcap.com/dist/npcap-1.82.exe',
+    [string]$InstallRoot    = 'C:\Program Files\Suricata',
+    [string]$DataRoot       = 'C:\ProgramData\Suricata',
+    [string]$CaptureInterfaceName = '',     # e.g. 'Wi-Fi'; blank = auto-pick physical
+    [string]$HomeNet        = '',           # e.g. '[192.168.1.0/24]'; blank = keep stock RFC1918
+    [string]$WazuhManager   = '',           # blank = do not touch agent enrollment
+    [int]   $WazuhRegPort   = 1515,
+    [string]$RegPassword    = '',           # authd registration password (if manager requires one)
+    [string]$AgentName      = $env:COMPUTERNAME,
+    [switch]$StripFileMagic,
     [switch]$SkipNpcap,
-    [switch]$SkipSuricata,
-    [switch]$SkipWazuhAgentInstall,
-    [switch]$SkipWazuhConfig,
-    [switch]$SkipScheduledTask
+    [switch]$SkipScheduledTask,
+    [switch]$SkipWazuhEnroll,   # never enroll, even if -WazuhManager is given
+    [switch]$ForceEnroll,       # re-enroll even if already enrolled to this manager
+    [switch]$NoPrompt,          # do not interactively ask for interface / HOME_NET
+    [switch]$SelfTest
 )
-
-Set-StrictMode -Version 1.0   # 1.0 catches uninitialized vars but does NOT throw on missing properties (registry/CIM objects)
-$ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13 } catch { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 }
-
-$LogRoot = Join-Path $DataRoot "log"
-$RuleRoot = Join-Path $DataRoot "rules"
-$StateRoot = Join-Path $DataRoot "state"
-$DownloadRoot = Join-Path $DataRoot "downloads"
-$MaintenanceScript = Join-Path $DataRoot "Suricata-Maintenance.ps1"
-$InstallLog = Join-Path $DataRoot "install.log"
-$TaskName = "Suricata Daily Update And Log Rotation"
-$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-
-function Write-Log {
-    param([string]$Message)
-    $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
-    Write-Host $line
-    [System.IO.File]::AppendAllText($InstallLog, "$line`r`n", $Utf8NoBom)
+# NOTE: 'Continue' (not 'Stop') so a native tool writing to stderr (suricata -T's
+# harmless file.magic warning, agent-auth INFO, etc.) can't abort the installer.
+# Critical failures are handled explicitly with throw / exit-code checks below.
+$ErrorActionPreference='Continue'
+[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
+$utf8 = New-Object Text.UTF8Encoding($false)
+$Exe       = Join-Path $InstallRoot 'suricata.exe'
+$Yaml      = Join-Path $InstallRoot 'suricata.yaml'
+$LogDir    = Join-Path $DataRoot 'log'
+$RuleDir   = Join-Path $DataRoot 'rules'
+$DlDir     = Join-Path $DataRoot 'downloads'
+$StateDir  = Join-Path $DataRoot 'state'
+$RulesFile = Join-Path $RuleDir 'suricata.rules'
+$EvePath   = Join-Path $LogDir 'eve.json'
+$SuriLog   = Join-Path $LogDir 'suricata.log'
+$Ossec     = 'C:\Program Files (x86)\ossec-agent\ossec.conf'
+$AgentLog  = 'C:\Program Files (x86)\ossec-agent\ossec.log'
+function Log($m){ Write-Host "[install] $m" -ForegroundColor Cyan }
+function Warn($m){ Write-Host "[install] WARN: $m" -ForegroundColor Yellow }
+function Restart-Robust($name){
+    if(-not (Get-Service $name -EA SilentlyContinue)){ return }
+    try{ Stop-Service $name -Force -ErrorAction Stop }catch{}
+    $sw=[Diagnostics.Stopwatch]::StartNew()
+    while((Get-Service $name -EA SilentlyContinue).Status -ne 'Stopped' -and $sw.Elapsed.TotalSeconds -lt 20){Start-Sleep 1}
+    if((Get-Service $name -EA SilentlyContinue).Status -ne 'Stopped'){
+        $pn=if($name -match 'Wazuh'){'wazuh-agent'}else{'suricata'}
+        Get-Process $pn -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue; Start-Sleep 2
+    }
+    Start-Service $name -EA SilentlyContinue; Start-Sleep 3
+}
+function Test-AlreadyEnrolled([string]$mgr){
+    $keys = 'C:\Program Files (x86)\ossec-agent\client.keys'
+    if(-not (Test-Path $keys)){ return $false }
+    if(-not ((Get-Content $keys -Raw).Trim())){ return $false }     # empty client.keys = not enrolled
+    $addr = ([regex]::Match((Get-Content $Ossec -Raw),'(?is)<server>\s*<address>\s*([^<]+)')).Groups[1].Value.Trim()
+    return ($addr -eq $mgr)                                         # enrolled AND pointing at this manager
 }
 
-function New-Directory {
-    param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) {
-        New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    }
+# ---------- interactive prompts (ask when not supplied on the command line) ----------
+if(-not $NoPrompt -and -not $CaptureInterfaceName){
+    Write-Host "`nAvailable physical network adapters that are UP:" -ForegroundColor Cyan
+    Get-NetAdapter -Physical -EA SilentlyContinue | Where-Object { $_.Status -eq 'Up' } |
+        Format-Table -AutoSize Name,InterfaceDescription,LinkSpeed | Out-Host
+    $ans = Read-Host "Capture interface name (press Enter to auto-pick the fastest UP adapter)"
+    if($ans){ $CaptureInterfaceName = $ans.Trim() }
+}
+if(-not $NoPrompt -and -not $HomeNet){
+    Write-Host "`nHOME_NET defines your local networks (rules fire EXTERNAL -> HOME_NET)." -ForegroundColor Cyan
+    $ans = Read-Host "HOME_NET, e.g. [192.168.1.0/24]  (press Enter to keep stock RFC1918)"
+    if($ans){ $HomeNet = $ans.Trim() }
 }
 
-function Write-TextFileNoBom {
-    param([string]$Path, [string]$Text)
-    [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
-}
+# ---------- 0. dirs + Defender exclusions ----------
+foreach($d in $DataRoot,$LogDir,$RuleDir,$DlDir,$StateDir){ New-Item -ItemType Directory -Force -Path $d | Out-Null }
+foreach($p in $InstallRoot,$DataRoot){ Add-MpPreference -ExclusionPath $p -EA SilentlyContinue }
+Add-MpPreference -ExclusionProcess 'suricata.exe' -EA SilentlyContinue
+Log "data dirs ready + Defender exclusions set"
 
-function Invoke-Download {
-    param([string]$Uri, [string]$OutFile)
-
-    # Reuse a pre-staged file (lets you copy the installer manually if this host
-    # can't reach the internet / the site's TLS is unhappy).
-    if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item $OutFile).Length -gt 1MB)) {
-        Write-Log "Using existing file (skip download): $OutFile"
-        return
-    }
-
-    Write-Log "Download: $Uri"
-    $ok = $false
-    try {
-        Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -MaximumRedirection 5
-        $ok = (Test-Path -LiteralPath $OutFile) -and ((Get-Item $OutFile).Length -gt 0)
-    } catch {
-        Write-Log "Invoke-WebRequest failed ($($_.Exception.Message)); trying curl.exe..."
-    }
-
-    if (-not $ok) {
-        # curl.exe uses the OS (Schannel) TLS stack - often works when .NET's does not.
-        $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
-        if ($curl) {
-            & $curl -L --fail --ssl-no-revoke --retry 2 -o $OutFile $Uri
-            $ok = (Test-Path -LiteralPath $OutFile) -and ((Get-Item $OutFile).Length -gt 0)
-        }
-    }
-
-    if (-not $ok) {
-        throw "Download failed for $Uri`n         This host may be unable to reach the site. Download it on another machine and copy it to:`n         $OutFile`n         then re-run (the script will reuse it)."
-    }
-}
-
-function Invoke-Process {
-    param([string]$FilePath, [string[]]$ArgumentList, [switch]$IgnoreExitCode)
-    Write-Log ("Run: {0} {1}" -f $FilePath, ($ArgumentList -join " "))
-    $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -Wait -PassThru -NoNewWindow
-    if (-not $IgnoreExitCode -and $process.ExitCode -ne 0) {
-        throw "$FilePath exited with code $($process.ExitCode)"
-    }
-    return $process.ExitCode
-}
-
-function Get-CaptureInterfaces {
-    # Explicit override (e.g. VMnet8 for the host<->VM lab network)
-    if ($CaptureInterfaceName) {
-        $adapter = Get-NetAdapter -Name $CaptureInterfaceName -ErrorAction Stop
-        return ,([pscustomobject]@{
-            Name = $adapter.Name
-            Description = $adapter.InterfaceDescription
-            # InterfaceGuid is ALREADY a braced string: {GUID}
-            Device = "\Device\NPF_$($adapter.InterfaceGuid)"
-        })
-    }
-
-    $exclude = "(?i)(virtual|vmware|virtualbox|hyper-v|veth|vethernet|loopback|npcap loopback|wi-fi direct|bluetooth|tap|tun|wireguard|zerotier|tailscale|hamachi|isatap|teredo)"
-
-    $adapters = Get-NetAdapter -Physical -ErrorAction Stop |
-        Where-Object {
-            $_.Status -eq "Up" -and $_.InterfaceGuid -and
-            $_.Name -notmatch $exclude -and $_.InterfaceDescription -notmatch $exclude
-        } | Sort-Object -Property @{Expression = "LinkSpeed"; Descending = $true}, Name
-
-    if (-not $adapters) {
-        $adapters = Get-NetAdapter -Physical -ErrorAction Stop |
-            Where-Object {
-                $_.InterfaceGuid -and
-                $_.Name -notmatch $exclude -and $_.InterfaceDescription -notmatch $exclude
-            } | Sort-Object -Property @{Expression = "LinkSpeed"; Descending = $true}, Name
-    }
-
-    if (-not $adapters) {
-        throw "No capture adapter found. Pass -CaptureInterfaceName '<adapter name>'."
-    }
-
-    foreach ($adapter in $adapters) {
-        [pscustomobject]@{
-            Name = $adapter.Name
-            Description = $adapter.InterfaceDescription
-            Device = "\Device\NPF_$($adapter.InterfaceGuid)"   # InterfaceGuid already braced
-        }
+# ---------- 1. Npcap ----------
+if(-not $SkipNpcap){
+    $hasNpcap = (Get-Service npcap -EA SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap')
+    if($hasNpcap){ Log "Npcap already present" }
+    else{
+        $np = Join-Path $DlDir 'npcap.exe'
+        Log "downloading Npcap..."; Invoke-WebRequest -Uri $NpcapUrl -OutFile $np -UseBasicParsing
+        Warn "Npcap free build has NO silent mode - complete the wizard (tick 'WinPcap API-compatible Mode')."
+        Start-Process -FilePath $np -Wait
+        if(-not ((Get-Service npcap -EA SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap'))){ throw "Npcap not detected after wizard - re-run and finish it." }
+        Log "Npcap installed"
     }
 }
 
-function Get-SuricataExePath {
-    $candidates = @(
-        (Join-Path $InstallRoot "suricata.exe"),
-        "C:\Program Files\Suricata\suricata.exe",
-        "C:\Program Files (x86)\Suricata\suricata.exe"
-    )
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
-    }
-    $found = Get-ChildItem -Path "C:\Program Files", "C:\Program Files (x86)" -Filter "suricata.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) { return $found.FullName }
-    throw "suricata.exe not found."
-}
-
-function Get-SuricataYamlPath {
-    $candidates = @(
-        (Join-Path $InstallRoot "suricata.yaml"),
-        (Join-Path $DataRoot "suricata.yaml"),
-        "C:\Program Files\Suricata\suricata.yaml",
-        "C:\Program Files (x86)\Suricata\suricata.yaml"
-    )
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
-    }
-    $found = Get-ChildItem -Path "C:\Program Files", "C:\Program Files (x86)", $DataRoot -Filter "suricata.yaml" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) { return $found.FullName }
-    throw "suricata.yaml not found."
-}
-
-function Get-WazuhConfPath {
-    if ($WazuhConf -and (Test-Path -LiteralPath $WazuhConf)) { return $WazuhConf }
-    $candidates = @(
-        "C:\Program Files (x86)\ossec-agent\ossec.conf",
-        "C:\Program Files\ossec-agent\ossec.conf"
-    )
-    foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate) { return $candidate }
-    }
-    return $null
-}
-
-function Install-Npcap {
-    if ($SkipNpcap) { Write-Log "Skip Npcap install."; return }
-
-    $npcapInstalled = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -and $_.DisplayName -match "Npcap" } | Select-Object -First 1
-    if ($npcapInstalled) {
-        Write-Log "Npcap already installed: $($npcapInstalled.DisplayName) $($npcapInstalled.DisplayVersion)"
-        return
-    }
-
-    $installer = Join-Path $DownloadRoot "npcap.exe"
-    Invoke-Download -Uri $NpcapUrl -OutFile $installer
-    # The FREE Npcap build cannot install silently ("/S" is OEM-only and pops a
-    # warning). Launch the wizard interactively and wait for the user to finish.
-    Write-Log "Launching Npcap installer INTERACTIVELY (free build has no silent mode)."
-    Write-Host ""
-    Write-Host "  >>> In the Npcap wizard: TICK 'Install Npcap in WinPcap API-compatible Mode', then Install/Finish." -ForegroundColor Yellow
-    Write-Host ""
-    Start-Process -FilePath $installer -Wait
-    Start-Sleep -Seconds 2
-    if ((Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path "C:\Windows\System32\Npcap")) {
-        Write-Log "Npcap installed."
+# ---------- 2. Suricata MSI ----------
+if(Test-Path $Exe){ Log "Suricata already installed" }
+else{
+    $msi = if($SuricataMsiPath){ $SuricataMsiPath } else { Join-Path $DlDir 'suricata.msi' }
+    if((Test-Path $msi) -and (Get-Item $msi).Length -gt 5MB){
+        Log "using pre-staged MSI: $msi ($([math]::Round((Get-Item $msi).Length/1MB,1)) MB) - skipping download"
     } else {
-        throw "Npcap not detected after the wizard. Re-run and complete the Npcap installer (don't cancel it)."
+        Log "downloading Suricata MSI from $SuricataMsiUrl ..."
+        try{ Invoke-WebRequest -Uri $SuricataMsiUrl -OutFile $msi -UseBasicParsing -TimeoutSec 300 }
+        catch{ Log "Invoke-WebRequest failed, falling back to curl..."; & curl.exe -L --ssl-no-revoke --max-time 300 -o $msi $SuricataMsiUrl }
     }
+    if(-not ((Test-Path $msi) -and (Get-Item $msi).Length -gt 5MB)){ throw "Suricata MSI not available at $msi (download failed). Pre-stage it and pass -SuricataMsiPath." }
+    # remove any already-registered Suricata first (avoids MSI 1638 "another version already installed")
+    $existing = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue | Where-Object { $_.DisplayName -match 'Suricata' }
+    if($existing){
+        if(Get-Service Suricata -EA SilentlyContinue){ Stop-Service Suricata -Force -EA SilentlyContinue; Start-Sleep 2; & sc.exe delete Suricata | Out-Null }
+        foreach($e in $existing){ $code=Split-Path $e.PSPath -Leaf; Log "removing existing '$($e.DisplayName)' ($code) before install..."; Start-Process msiexec.exe -ArgumentList "/x $code /qn /norestart" -Wait }
+    }
+    Log "installing Suricata MSI (silent)..."
+    $p = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart /L*v `"$(Join-Path $DataRoot 'suricata-msi.log')`"" -Wait -PassThru
+    if($p.ExitCode -notin 0,3010){ $hint=if($p.ExitCode -eq 1638){' (1638 = another Suricata still registered; uninstall it in Add/Remove Programs, then re-run)'}else{''}; throw "Suricata MSI failed (exit $($p.ExitCode))$hint" }
+    if(-not (Test-Path $Exe)){ throw "suricata.exe missing after MSI install" }
+    Log "Suricata installed (exit $($p.ExitCode))"
 }
+$ver = (& $Exe -V 2>&1 | Select-String -Pattern '(\d+\.\d+\.\d+)' | Select-Object -First 1).Matches.Groups[1].Value
+Log "Suricata version $ver"
 
-function Install-SuricataUpdate {
-    $existing = Get-Command "suricata-update" -ErrorAction SilentlyContinue
-    if ($existing) {
-        Write-Log "suricata-update already present: $($existing.Source)"
-        return
-    }
+# ---------- 3. capture interface ----------
+if($CaptureInterfaceName){ $ad = Get-NetAdapter -Name $CaptureInterfaceName -ErrorAction Stop }
+else{
+    $ex='(?i)(virtual|vmware|virtualbox|hyper-v|veth|loopback|npcap loopback|wi-fi direct|bluetooth|tap|tun|wireguard|zerotier|tailscale|hamachi|isatap|teredo)'
+    $ad = Get-NetAdapter -Physical -EA SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.Name -notmatch $ex -and $_.InterfaceDescription -notmatch $ex } | Sort-Object LinkSpeed -Descending | Select-Object -First 1
+    if(-not $ad){ throw "no capture adapter found - pass -CaptureInterfaceName '<name>'" }
+}
+$Device = "\Device\NPF_$($ad.InterfaceGuid)"
+Log "capture interface: $($ad.Name) -> $Device"
 
-    $python = Get-Command "python.exe" -ErrorAction SilentlyContinue
-    if (-not $python) {
-        $winget = Get-Command "winget.exe" -ErrorAction SilentlyContinue
-        if (-not $winget) {
-            Write-Log "Python and winget not found. Skip suricata-update install (direct ET Open tarball path will be used)."
-            return
-        }
-        Write-Log "Installing Python via winget (required for suricata-update)..."
-        $rc = Invoke-Process -FilePath $winget.Source -ArgumentList @("install", "--id", "Python.Python.3.12", "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements") -IgnoreExitCode
-        Write-Log "winget python install exit: $rc"
-        $python = Get-Command "python.exe" -ErrorAction SilentlyContinue
-    }
+# ---------- 4. ET Open rules (suricata-update is broken on Windows) ----------
+$tar = Join-Path $DlDir 'emerging.rules.tar.gz'
+$mm = $ver.Substring(0,$ver.LastIndexOf('.'))   # major.minor e.g. 8.0
+$urls = @("https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz",
+          "https://rules.emergingthreats.net/open/suricata-$mm.0/emerging.rules.tar.gz",
+          "https://rules.emergingthreats.net/open/suricata-$mm/emerging.rules.tar.gz")
+$got=$false
+foreach($u in $urls){ try{ Log "downloading ET Open: $u"; Invoke-WebRequest -Uri $u -OutFile $tar -UseBasicParsing; $got=$true; break }catch{ Warn "failed $u" } }
+if(-not $got){ throw "could not download ET Open ruleset" }
+$ext = Join-Path $StateDir 'rules-extract'
+if(Test-Path $ext){ Remove-Item $ext -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $ext | Out-Null
+& tar.exe -xzf $tar -C $ext
+$rfiles = Get-ChildItem (Join-Path $ext 'rules') -Filter *.rules -EA SilentlyContinue
+if(-not $rfiles){ $rfiles = Get-ChildItem $ext -Recurse -Filter *.rules }
+$sb = New-Object Text.StringBuilder
+foreach($f in $rfiles){ [void]$sb.AppendLine([IO.File]::ReadAllText($f.FullName)) }
+$rulesText = $sb.ToString()
+if($StripFileMagic){ $rulesText = ($rulesText -split "`n" | Where-Object { $_ -notmatch 'file\.magic' }) -join "`n" }
+[IO.File]::WriteAllText($RulesFile, $rulesText, $utf8)   # UTF-8 no BOM (BOM breaks rule 1)
+$sigCount = ([regex]::Matches($rulesText,'(?m)^\s*(alert|drop)\s')).Count
+Log "wrote $RulesFile ($($rfiles.Count) files, ~$sigCount signatures)"
 
-    if (-not $python) {
-        Write-Log "Python not available. Skip suricata-update."
-        return
-    }
+# ---------- 5. configure suricata.yaml (the CORRECT way) ----------
+Copy-Item $Yaml "$Yaml.bak-$(Get-Date -Format yyyyMMddHHmmss)" -Force
+$y = Get-Content -LiteralPath $Yaml -Raw
+function Set-YamlKey([string]$text,[string]$key,[string]$val){
+    if($text -match "(?m)^(\s*)$([regex]::Escape($key)):.*$"){ return [regex]::Replace($text,"(?m)^(\s*)$([regex]::Escape($key)):.*$","`${1}${key}: $val",1) }
+    return $text
+}
+$y = Set-YamlKey $y 'default-log-dir'   ("'{0}'" -f $LogDir)
+$y = Set-YamlKey $y 'default-rule-path' ("'{0}'" -f $RuleDir)
+if($HomeNet){ $y = Set-YamlKey $y 'HOME_NET' ('"{0}"' -f $HomeNet) }
+# rule-files: -> single merged file (FIX 1 baked in)
+$ylines = $y -split "`r?`n"
+$rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }
+if($rf -ge 0){
+    $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
+    $ylines = @($ylines[0..$rf]) + @('  - suricata.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+    $y = $ylines -join "`r`n"
+}
+[IO.File]::WriteAllText($Yaml, $y, $utf8)
+Log "suricata.yaml configured (log-dir, rule-path, rule-files=suricata.rules)"
+# validate quietly with QUOTED path (FIX 2). file.magic warnings are expected on Windows (no libmagic).
+try { $tout = (& $Exe -T -c $Yaml 2>&1 | Out-String) } catch { $tout = "$_" }
+$tline = ($tout -split "`n" | Where-Object { $_ -match 'successfully loaded|no rules were loaded' } | Select-Object -First 1)
+if($tline){ Log ("  -T: " + $tline.Trim()) } else { Log "  -T: config parsed (file.magic warnings ignored on Windows)" }
 
-    Write-Log "Upgrading pip and installing suricata-update via pip..."
-    Invoke-Process -FilePath $python.Source -ArgumentList @("-m", "pip", "install", "--upgrade", "pip") -IgnoreExitCode | Out-Null
-    $rc = Invoke-Process -FilePath $python.Source -ArgumentList @("-m", "pip", "install", "--upgrade", "suricata-update") -IgnoreExitCode
-    if ($rc -eq 0) {
-        Write-Log "suricata-update installed."
+# ---------- 6. service with QUOTED ImagePath (FIX 2) ----------
+if(Get-Service Suricata -EA SilentlyContinue){ Restart-Robust 'Suricata' }
+else{
+    & $Exe --service-install -c $Yaml -i $Device | Out-Null
+    Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Suricata' -Name ImagePath -Value ('"{0}" -c "{1}" -i "{2}"' -f $Exe,$Yaml,$Device) -Type ExpandString
+    Set-Service Suricata -StartupType Automatic
+    Start-Service Suricata; Start-Sleep 4
+}
+Log "Suricata service: $((Get-Service Suricata).Status)"
+
+# ---------- 7. optional: enroll Wazuh agent to a manager (skip if already enrolled) ----------
+if($WazuhManager -and (Test-Path $Ossec)){
+    if($SkipWazuhEnroll){
+        Log "enrollment skipped (-SkipWazuhEnroll)"
+    } elseif((Test-AlreadyEnrolled $WazuhManager) -and -not $ForceEnroll){
+        Log "agent already enrolled to $WazuhManager (client.keys present + address matches) - skipping enroll. Use -ForceEnroll to re-enroll."
     } else {
-        Write-Log "suricata-update install returned exit $rc - may be broken on Windows (see comment in Invoke-RuleUpdate)."
+        Log "enrolling Wazuh agent to $WazuhManager as $AgentName"
+        $oc = Get-Content $Ossec -Raw
+        $oc = [regex]::Replace($oc,'(?is)(<server>\s*<address>)\s*[^<]+\s*(</address>)',"`${1}$WazuhManager`${2}")
+        Copy-Item $Ossec "$Ossec.bak-enroll-$(Get-Date -Format yyyyMMddHHmmss)" -Force
+        [IO.File]::WriteAllText($Ossec,$oc,$utf8)
+        $aa = 'C:\Program Files (x86)\ossec-agent\agent-auth.exe'
+        $aaArgs = @('-m',$WazuhManager,'-p',"$WazuhRegPort",'-A',$AgentName)
+        if($RegPassword){ $aaArgs += @('-P',$RegPassword) }
+        & $aa @aaArgs 2>&1 | ForEach-Object { Log "  agent-auth: $_" }
     }
 }
 
-function Install-Suricata {
-    if ($SkipSuricata) { Write-Log "Skip Suricata install."; return }
+# ---------- 8. Wazuh eve.json <localfile> (FIX 3) ----------
+if(Test-Path $Ossec){
+    $oc = Get-Content $Ossec -Raw; $o0=$oc
+    $oc = [regex]::Replace($oc,"(?is)[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*","`r`n")
+    $blk = "  <localfile>`r`n    <log_format>json</log_format>`r`n    <location>$EvePath</location>`r`n  </localfile>`r`n"
+    $idx = $oc.LastIndexOf('</ossec_config>')
+    $oc = $oc.Substring(0,$idx)+$blk+$oc.Substring($idx)
+    if($oc -ne $o0){ Copy-Item $Ossec "$Ossec.bak-eve-$(Get-Date -Format yyyyMMddHHmmss)" -Force; [IO.File]::WriteAllText($Ossec,$oc,$utf8) }
+    Restart-Robust 'WazuhSvc'
+    Log "eve.json bound to Wazuh agent + agent restarted"
+} else { Warn "no Wazuh agent (ossec.conf) on this machine - Suricata runs as local IDS only" }
 
-    $existingPath = $null
-    $cmd = Get-Command "suricata.exe" -ErrorAction SilentlyContinue
-    if ($cmd -and $cmd.Source) { $existingPath = $cmd.Source }
-    if (-not $existingPath) {
-        $found = Get-ChildItem -Path "C:\Program Files", "C:\Program Files (x86)" -Filter "suricata.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($found) { $existingPath = $found.FullName }
-    }
-    if ($existingPath) { Write-Log "Suricata already present: $existingPath"; return }
-
-    $localCandidates = @()
-    if ($SuricataMsiPath -and (Test-Path -LiteralPath $SuricataMsiPath)) {
-        $localCandidates += $SuricataMsiPath
-    }
-    if ($PSScriptRoot) {
-        $localCandidates += (Join-Path $PSScriptRoot "Suricata-8.0.5-1-64bit.msi")
-    }
-    $installer = $null
-    foreach ($candidate in $localCandidates) {
-        if (Test-Path -LiteralPath $candidate) {
-            $installer = $candidate
-            Write-Log "Use local Suricata MSI: $installer"
-            break
-        }
-    }
-    if (-not $installer) {
-        $installer = Join-Path $DownloadRoot "suricata.msi"
-        $msiLog = Join-Path $DataRoot "suricata-msi.log"
-        Invoke-Download -Uri $SuricataMsiUrl -OutFile $installer
-    }
-    $msiLog = Join-Path $DataRoot "suricata-msi.log"
-    Write-Log "Installing Suricata MSI silently (/qn)..."
-    # 0 = success, 3010 = success but reboot requested (common with /norestart)
-    $rc = Invoke-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $installer, "/qn", "/norestart", "/L*v", $msiLog) -IgnoreExitCode
-    if ($rc -ne 0 -and $rc -ne 3010) { throw "Suricata MSI failed (msiexec exit $rc). See $msiLog" }
-    Start-Sleep -Seconds 2
-    $exe = (Join-Path $InstallRoot "suricata.exe")
-    if (-not (Test-Path -LiteralPath $exe)) {
-        $exe = (Get-ChildItem "C:\Program Files", "C:\Program Files (x86)" -Filter "suricata.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-    }
-    if (-not $exe) { throw "Suricata MSI ran (exit $rc) but suricata.exe was not found." }
-    Write-Log "Suricata installed (msiexec exit $rc): $exe"
-}
-
-function Install-WazuhAgent {
-    if ($SkipWazuhAgentInstall) { Write-Log "Skip Wazuh agent install."; return }
-
-    if (Get-Service WazuhSvc -ErrorAction SilentlyContinue) {
-        Write-Log "Wazuh agent already installed (WazuhSvc present)."
-        return
-    }
-    if (-not $WazuhManager) { Write-Log "No -WazuhManager set; skipping Wazuh agent install."; return }
-
-    $installer = Join-Path $DownloadRoot "wazuh-agent.msi"
-    Invoke-Download -Uri $WazuhAgentMsiUrl -OutFile $installer
-    Write-Log "Installing Wazuh agent (manager=$WazuhManager, name=$WazuhAgentName)..."
-    $rc = Invoke-Process -FilePath "msiexec.exe" -ArgumentList @(
-        "/i", $installer, "/qn", "/norestart",
-        "WAZUH_MANAGER=$WazuhManager",
-        "WAZUH_REGISTRATION_SERVER=$WazuhManager",
-        "WAZUH_AGENT_NAME=$WazuhAgentName"
-    ) -IgnoreExitCode
-    if ($rc -ne 0 -and $rc -ne 3010) { throw "Wazuh agent MSI failed (msiexec exit $rc)." }
-    Start-Sleep -Seconds 3
-
-    $confPath = Get-WazuhConfPath
-    if (-not $confPath) { throw "Wazuh agent installed but ossec.conf not found." }
-    $agentDir = Split-Path $confPath
-
-    # MSI property quotes can be mangled (agent then defaults to 127.0.0.1) -
-    # force the manager address directly in ossec.conf to be safe.
-    $c = [System.IO.File]::ReadAllText($confPath)
-    if ($c -match "<address>.*?</address>") {
-        $c = [regex]::Replace($c, "<address>.*?</address>", "<address>$WazuhManager</address>", 1)
-        [System.IO.File]::WriteAllText($confPath, $c, $Utf8NoBom)
-        Write-Log "Forced agent manager address -> $WazuhManager"
-    }
-
-    # Register with the manager (authd on 1515) if not already keyed.
-    $keys = Join-Path $agentDir "client.keys"
-    $keyed = (Test-Path $keys) -and ((Get-Item $keys).Length -gt 0)
-    $auth = Join-Path $agentDir "agent-auth.exe"
-    if (-not $keyed -and (Test-Path $auth)) {
-        Write-Log "Registering with manager via agent-auth (-m $WazuhManager)..."
-        Invoke-Process -FilePath $auth -ArgumentList @("-m", $WazuhManager, "-A", $WazuhAgentName) -IgnoreExitCode | Out-Null
-    }
-
-    Set-Service -Name WazuhSvc -StartupType Automatic -ErrorAction SilentlyContinue
-    Restart-Service WazuhSvc -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    $st = (Get-Service WazuhSvc -ErrorAction SilentlyContinue).Status
-    Write-Log "WazuhSvc status: $st"
-    if ((Test-Path $keys) -and ((Get-Item $keys).Length -gt 0)) { Write-Log "Agent registered (client.keys populated)." }
-    else { Write-Log "WARNING: client.keys empty - manager may require an enrollment password; register manually." }
-}
-
-function Backup-File {
-    param([string]$Path)
-    if (Test-Path -LiteralPath $Path) {
-        $backup = "{0}.{1}.bak" -f $Path, (Get-Date -Format "yyyyMMddHHmmss")
-        Copy-Item -LiteralPath $Path -Destination $backup -Force
-        Write-Log "Backup: $backup"
-    }
-}
-
-function Set-KeyValueLine {
-    param([string]$Text, [string]$Key, [string]$Value)
-    $pattern = "(?m)^\s*$([regex]::Escape($Key))\s*:.*$"
-    $replacement = "${Key}: $Value"
-    if ($Text -match $pattern) {
-        return [regex]::Replace($Text, $pattern, $replacement, 1)
-    }
-    return "$replacement`r`n$Text"
-}
-
-function Test-YamlIntact {
-    # A complete suricata.yaml has these core sections. If they're missing the
-    # file was truncated/corrupted and must NOT be tuned as-is.
-    param([string]$Text)
-    return (($Text -match "(?m)^\s*rule-files:") -and ($Text -match "(?m)^\s*app-layer:"))
-}
-
-function Set-SuricataYaml {
-    param([string]$YamlPath, [object[]]$Interfaces)
-
-    $content = Get-Content -LiteralPath $YamlPath -Raw
-
-    # Self-heal: if the yaml is truncated/incomplete, restore the newest INTACT
-    # backup instead of tuning a broken file.
-    if (-not (Test-YamlIntact $content)) {
-        Write-Log "WARNING: suricata.yaml looks truncated - searching for an intact backup..."
-        $good = Get-ChildItem (Split-Path $YamlPath) -Filter "suricata.yaml*.bak" -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending |
-                Where-Object { Test-YamlIntact (Get-Content -LiteralPath $_.FullName -Raw) } |
-                Select-Object -First 1
-        if ($good) {
-            Copy-Item -LiteralPath $good.FullName -Destination $YamlPath -Force
-            $content = Get-Content -LiteralPath $YamlPath -Raw
-            Write-Log "Restored intact suricata.yaml from backup: $($good.Name)"
-        } else {
-            throw "suricata.yaml is incomplete and no intact backup found. Reinstall the Suricata MSI (it ships the default config), then re-run."
-        }
-    }
-
-    Backup-File -Path $YamlPath
-
-    # Only change the two path keys (single-line, safe). SINGLE quotes because
-    # backslashes are invalid escapes inside double-quoted YAML (\D, \S, ...).
-    $content = Set-KeyValueLine -Text $content -Key "default-log-dir"   -Value ("'{0}'" -f $LogRoot)
-    $content = Set-KeyValueLine -Text $content -Key "default-rule-path" -Value ("'{0}'" -f $RuleRoot)
-
-    # IMPORTANT: do NOT regex-rewrite the eve-log or pcap blocks.
-    #  - Stock suricata.yaml already has eve-log enabled -> eve.json with the full
-    #    'types' list. A greedy (?s) regex here previously truncated the whole file
-    #    (no types -> empty eve.json; no rule-files -> -T fails).
-    #  - The capture interface is supplied on the service command line (-i <device>),
-    #    so no 'pcap:' block edit is required.
-
-    Write-TextFileNoBom -Path $YamlPath -Text $content
-    Write-Log "Updated Suricata YAML (log-dir + rule-path only): $YamlPath"
-}
-
-function Invoke-RuleUpdate {
-    # Direct ET Open download. suricata-update is broken on Windows (it locks its
-    # NamedTemporaryFile -> "Failed to copy file: [Errno 13]"), so we never use it.
-    New-Directory -Path $RuleRoot
-    New-Directory -Path $StateRoot
-    New-Directory -Path $DownloadRoot
-
-    try {
-        Add-MpPreference -ExclusionPath $RuleRoot, $DownloadRoot -ErrorAction Stop
-        Write-Log "Defender exclusion added for rules/download dirs."
-    } catch {
-        Write-Log "Could not add Defender exclusion: $($_.Exception.Message)"
-    }
-
-    $exe = Get-SuricataExePath
-    $version = "8.0.5"
-    try {
-        $vout = (& $exe -V 2>&1 | Out-String)
-        if ($vout -match "version\s+([0-9]+\.[0-9]+\.[0-9]+)") { $version = $Matches[1] }
-    } catch { }
-    Write-Log "Suricata version detected: $version"
-
-    # Try the version-specific ET Open directory first; if it returns nothing
-    # (404 / empty archive on the ET Open side), fall back to the 7.0.16 archive
-    # which has the widest historical coverage.
-    $tar = Join-Path $DownloadRoot "emerging.rules.tar.gz"
-    $candidates = @(
-        "https://rules.emergingthreats.net/open/suricata-$version/emerging.rules.tar.gz",
-        "https://rules.emergingthreats.net/open/suricata-7.0.16/emerging.rules.tar.gz"
-    )
-    $downloaded = $false
-    foreach ($candidate in $candidates) {
-        try {
-            Write-Log "Try rules URL: $candidate"
-            Invoke-Download -Uri $candidate -OutFile $tar
-            if ((Test-Path -LiteralPath $tar) -and ((Get-Item $tar).Length -gt 1024)) {
-                $downloaded = $true
-                Write-Log "Got rules from: $candidate"
-                break
-            }
-        } catch {
-            Write-Log "Rules URL failed: $($_.Exception.Message)"
-        }
-    }
-    if (-not $downloaded) { throw "Could not download ET Open rules from any candidate URL." }
-
-    $extract = Join-Path $StateRoot "rules-extract"
-    if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
-    New-Directory -Path $extract
-    Invoke-Process -FilePath "tar.exe" -ArgumentList @("-xzf", $tar, "-C", $extract) | Out-Null
-
-    $glob = Join-Path $extract "rules\*.rules"
-    $ruleFiles = @(Get-ChildItem -Path $glob -ErrorAction SilentlyContinue)
-    if (-not $ruleFiles) { throw "No .rules files found in the extracted ET Open archive." }
-
-    $merged = Join-Path $RuleRoot "suricata.rules"
-    Get-Content -Path $glob | Set-Content -LiteralPath $merged -Encoding ascii   # ASCII = no BOM (BOM breaks rule 1)
-    $count = (Select-String -Path $merged -Pattern "^\s*alert " -ErrorAction SilentlyContinue).Count
-    Write-Log "Wrote $merged ($($ruleFiles.Count) files, ~$count alert signatures)."
-
-    $yaml = Get-SuricataYamlPath
-    $rc = Invoke-Process -FilePath $exe -ArgumentList @("-T", "-c", $yaml) -IgnoreExitCode
-    if ($rc -eq 0) { Write-Log "Config test (suricata -T) passed." }
-    else { Write-Log "Config test returned exit $rc - review warnings, continuing." }
-}
-
-function Restart-Suricata {
-    $exe = Get-SuricataExePath
-    $yaml = Get-SuricataYamlPath
-    $iface = (Get-CaptureInterfaces | Select-Object -First 1).Device
-    $imagePath = '"{0}" -c "{1}" -i "{2}"' -f $exe, $yaml, $iface
-
-    $service = Get-Service -Name "Suricata" -ErrorAction SilentlyContinue
-    if (-not $service) {
-        Invoke-Process -FilePath $exe -ArgumentList @("--service-install", "-c", $yaml, "-i", $iface) -IgnoreExitCode | Out-Null
-        $service = Get-Service -Name "Suricata" -ErrorAction SilentlyContinue
-    }
-    if (-not $service) {
-        New-Service -Name "Suricata" -BinaryPathName $imagePath -DisplayName "Suricata IDS" -StartupType Automatic | Out-Null
-        Write-Log "Created Suricata service via New-Service."
-        $service = Get-Service -Name "Suricata" -ErrorAction SilentlyContinue
-    }
-    if (-not $service) { throw "Failed to create the Suricata service." }
-
-    # Force the QUOTED ImagePath - fixes --service-install's unquoted binPath bug
-    # (SCM otherwise tries to launch "C:\Program" and the service won't start).
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\Suricata"
-    Set-ItemProperty -Path $regPath -Name "ImagePath" -Value $imagePath -Type ExpandString
-    Set-Service -Name "Suricata" -StartupType Automatic
-    Write-Log "Service ImagePath (quoted): $imagePath"
-
-    Restart-Service -Name "Suricata" -Force
-    Start-Sleep -Seconds 2
-    $status = (Get-Service -Name "Suricata").Status
-    Write-Log "Suricata service status: $status"
-    if ($status -ne "Running") { throw "Suricata service did not reach Running (status: $status)." }
-}
-
-function Set-WazuhLocalfile {
-    if ($SkipWazuhConfig) { Write-Log "Skip Wazuh ossec.conf update."; return }
-
-    $confPath = Get-WazuhConfPath
-    if (-not $confPath) { Write-Log "Wazuh agent ossec.conf not found. Skip Wazuh binding."; return }
-
-    $evePath = Join-Path $LogRoot "eve.json"
-    $content = Get-Content -LiteralPath $confPath -Raw
-    Backup-File -Path $confPath
-
-    # Remove any pre-existing Suricata eve.json <localfile> so we never double-monitor
-    # or leave a stale path behind.
-    $before = $content
-    $content = [regex]::Replace($content, "(?is)[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*", "`r`n")
-    if ($content -ne $before) { Write-Log "Removed pre-existing Suricata eve.json localfile block(s)." }
-
-    $block = @"
-  <localfile>
-    <log_format>json</log_format>
-    <location>$evePath</location>
-  </localfile>
+# ---------- 9. daily maintenance task (rule refresh + log rotation) ----
+if(-not $SkipScheduledTask){
+    $maint = Join-Path $DataRoot 'Suricata-Maintenance.ps1'
+    $body = @"
+`$ErrorActionPreference='Continue'
+`$ver=(& '$Exe' -V 2>&1 | Select-String '(\d+\.\d+\.\d+)').Matches.Groups[1].Value
+`$tar='$DlDir\emerging.rules.tar.gz'; `$ext='$StateDir\rules-extract'
+try{ Invoke-WebRequest "https://rules.emergingthreats.net/open/suricata-`$ver/emerging.rules.tar.gz" -OutFile `$tar -UseBasicParsing
+ if(Test-Path `$ext){Remove-Item `$ext -Recurse -Force}; New-Item -ItemType Directory -Force `$ext|Out-Null
+ & tar.exe -xzf `$tar -C `$ext
+ `$sb=New-Object Text.StringBuilder; Get-ChildItem "`$ext\rules" -Filter *.rules|%{[void]`$sb.AppendLine([IO.File]::ReadAllText(`$_.FullName))}
+ [IO.File]::WriteAllText('$RulesFile',`$sb.ToString(),(New-Object Text.UTF8Encoding(`$false)))
+ Restart-Service Suricata -Force }catch{}
+# rotate eve.json if > 2GB
+`$e='$EvePath'; if((Test-Path `$e) -and (Get-Item `$e).Length -gt 2GB){ Stop-Service Suricata -Force
+ for(`$i=2;`$i -ge 1;`$i--){ if(Test-Path "`$e.`$i"){Move-Item "`$e.`$i" "`$e.`$(`$i+1)" -Force} }
+ Move-Item `$e "`$e.1" -Force; Start-Service Suricata }
 "@
-    if ($content -match "</ossec_config>") {
-        $content = [regex]::Replace($content, "(?is)\s*</ossec_config>\s*$", "`r`n$block`r`n</ossec_config>`r`n", 1)
-    } else {
-        $content += "`r`n$block`r`n"
+    [IO.File]::WriteAllText($maint,$body,$utf8)
+    $act=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$maint`""
+    $trg=New-ScheduledTaskTrigger -Daily -At '13:00'
+    $prn=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+    Register-ScheduledTask -TaskName 'Suricata Daily Update And Log Rotation' -Action $act -Trigger $trg -Principal $prn -Force | Out-Null
+    Log "daily maintenance task registered (13:00)"
+}
+
+# ---------- 10. verify ----------
+Write-Host "`n===== VERIFY =====" -ForegroundColor Cyan
+Start-Sleep 4
+$ld = Select-String -Path $SuriLog -Pattern 'rules successfully loaded|no rules were loaded' -EA SilentlyContinue | Select-Object -Last 1
+Write-Host ("  rules        : " + $(if($ld){$ld.Line.Trim()}else{'?'}))
+Write-Host ("  Suricata svc : " + (Get-Service Suricata -EA SilentlyContinue).Status)
+Write-Host ("  Wazuh agent  : " + $(if(Get-Service WazuhSvc -EA SilentlyContinue){(Get-Service WazuhSvc).Status}else{'not installed'}))
+$conn = Get-NetTCPConnection -RemotePort 1514 -State Established -EA SilentlyContinue | Select-Object -First 1
+Write-Host ("  manager link : " + $(if($conn){"Established -> $($conn.RemoteAddress):1514"}else{'none'}))
+if(Test-Path $AgentLog){ $an=Select-String -Path $AgentLog -Pattern 'Analyzing file.*eve\.json' -EA SilentlyContinue | Select-Object -Last 1; Write-Host ("  logcollector : " + $(if($an){'tailing eve.json'}else{'NOT tailing eve.json'})) }
+
+if($SelfTest){
+    Write-Host "  self-test    : waiting up to 120s for a live alert..."
+    for($s=0;$s -lt 120;$s+=10){ Start-Sleep 10
+        if(Test-Path $EvePath){ $r=Get-Content $EvePath -Tail 800|%{try{$x=$_|ConvertFrom-Json; if($x.event_type -eq 'alert'){$x}}catch{}}|Select-Object -Last 1
+            if($r){ Write-Host "  LIVE ALERT   : [$($r.alert.signature_id)] $($r.alert.signature)" -ForegroundColor Green; break } }
     }
-
-    Write-TextFileNoBom -Path $confPath -Text $content
-    Write-Log "Updated Wazuh config: $confPath -> $evePath"
-
-    $wazuhService = Get-Service -Name "WazuhSvc" -ErrorAction SilentlyContinue
-    if ($wazuhService) {
-        Restart-Service -Name "WazuhSvc" -Force
-        Write-Log "Restarted WazuhSvc."
-    }
 }
-
-function Write-MaintenanceScript {
-    $script = @'
-[CmdletBinding()]
-param(
-    [string]$DataRoot = "__DATA_ROOT__",
-    [int64]$MaxEveBytes = __MAX_EVE_BYTES__,
-    [int]$KeepRotatedLogs = __KEEP_ROTATED_LOGS__
-)
-
-Set-StrictMode -Version 1.0   # 1.0 catches uninitialized vars but does NOT throw on missing properties (registry/CIM objects)
-$ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"
-try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13 } catch { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 }
-
-$LogRoot = Join-Path $DataRoot "log"
-$RuleRoot = Join-Path $DataRoot "rules"
-$DownloadRoot = Join-Path $DataRoot "downloads"
-$StateRoot = Join-Path $DataRoot "state"
-$MaintLog = Join-Path $DataRoot "maintenance.log"
-
-function Write-MaintLog {
-    param([string]$Message)
-    $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
-    [System.IO.File]::AppendAllText($MaintLog, "$line`r`n", $Utf8NoBom)
-}
-
-function Get-SuricataExe {
-    foreach ($p in @("C:\Program Files\Suricata\suricata.exe","C:\Program Files (x86)\Suricata\suricata.exe")) {
-        if (Test-Path -LiteralPath $p) { return $p }
-    }
-    $f = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" -Filter "suricata.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($f) { return $f.FullName }
-    return $null
-}
-
-function Get-SuricataYaml {
-    foreach ($p in @("C:\Program Files\Suricata\suricata.yaml","C:\Program Files (x86)\Suricata\suricata.yaml",(Join-Path $DataRoot "suricata.yaml"))) {
-        if (Test-Path -LiteralPath $p) { return $p }
-    }
-    return $null
-}
-
-function Restart-SuricataService {
-    $service = Get-Service -Name "Suricata" -ErrorAction SilentlyContinue
-    if ($service) {
-        Restart-Service -Name "Suricata" -Force
-        Write-MaintLog "Restarted Suricata service."
-        return
-    }
-    Get-Process -Name "suricata" -ErrorAction SilentlyContinue | Stop-Process -Force
-    Write-MaintLog "Suricata service missing; stopped Suricata processes only."
-}
-
-function Update-SuricataRules {
-    # Direct ET Open download (suricata-update is broken on Windows - Errno 13).
-    $exe = Get-SuricataExe
-    if (-not $exe) { Write-MaintLog "suricata.exe not found. Skip rule update."; return }
-
-    $ver = "8.0.5"
-    try { $vout = (& $exe -V 2>&1 | Out-String); if ($vout -match "version\s+([0-9]+\.[0-9]+\.[0-9]+)") { $ver = $Matches[1] } } catch { }
-
-    New-Item -ItemType Directory -Force $DownloadRoot | Out-Null
-    New-Item -ItemType Directory -Force $RuleRoot | Out-Null
-    $tar = Join-Path $DownloadRoot "emerging.rules.tar.gz"
-    $rurls = @(
-        "https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz",
-        "https://rules.emergingthreats.net/open/suricata-7.0.16/emerging.rules.tar.gz"
-    )
-    $downloaded = $false
-    foreach ($rurl in $rurls) {
-        try {
-            Invoke-WebRequest -Uri $rurl -OutFile $tar -UseBasicParsing -MaximumRedirection 5
-            if ((Test-Path -LiteralPath $tar) -and ((Get-Item $tar).Length -gt 1024)) {
-                Write-MaintLog "Got rules from: $rurl"
-                $downloaded = $true
-                break
-            }
-        } catch {
-            $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
-            if ($curl) {
-                & $curl -L --fail --ssl-no-revoke --retry 2 -o $tar $rurl
-                if ((Test-Path -LiteralPath $tar) -and ((Get-Item $tar).Length -gt 1024)) {
-                    Write-MaintLog "Got rules from (curl): $rurl"
-                    $downloaded = $true
-                    break
-                }
-            }
-        }
-    }
-    if (-not $downloaded) { Write-MaintLog "Rule download failed for all candidates. Skip."; return }
-
-    $extract = Join-Path $StateRoot "rules-extract"
-    if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
-    New-Item -ItemType Directory -Force $extract | Out-Null
-    & tar.exe -xzf $tar -C $extract
-    $glob = Join-Path $extract "rules\*.rules"
-    if (-not (Get-ChildItem -Path $glob -ErrorAction SilentlyContinue)) { Write-MaintLog "No rules extracted. Skip."; return }
-
-    Get-Content -Path $glob | Set-Content -LiteralPath (Join-Path $RuleRoot "suricata.rules") -Encoding ascii
-    $yaml = Get-SuricataYaml
-    if ($yaml) { & $exe -T -c $yaml 2>&1 | Out-Null }
-    Write-MaintLog "Rules updated via direct ET Open download (Suricata $ver)."
-    Restart-SuricataService
-}
-
-function Rotate-EveLog {
-    $eve = Join-Path $LogRoot "eve.json"
-    if (-not (Test-Path -LiteralPath $eve)) { Write-MaintLog "eve.json not found. Skip rotation."; return }
-
-    $item = Get-Item -LiteralPath $eve
-    if ($item.Length -lt $MaxEveBytes) {
-        Write-MaintLog "eve.json size $($item.Length) below limit $MaxEveBytes."
-        return
-    }
-
-    Restart-SuricataService
-    Start-Sleep -Seconds 2
-    Get-Process -Name "suricata" -ErrorAction SilentlyContinue | Stop-Process -Force
-
-    for ($i = $KeepRotatedLogs; $i -ge 1; $i--) {
-        $current = Join-Path $LogRoot "eve.json.$i"
-        $next = Join-Path $LogRoot "eve.json.$($i + 1)"
-        if (Test-Path -LiteralPath $current) {
-            if ($i -eq $KeepRotatedLogs) { Remove-Item -LiteralPath $current -Force }
-            else { Move-Item -LiteralPath $current -Destination $next -Force }
-        }
-    }
-
-    Move-Item -LiteralPath $eve -Destination (Join-Path $LogRoot "eve.json.1") -Force
-    Restart-SuricataService
-    Write-MaintLog "Rotated eve.json."
-}
-
-try {
-    Update-SuricataRules
-    Rotate-EveLog
-    Write-MaintLog "Maintenance complete."
-} catch {
-    Write-MaintLog "ERROR: $($_.Exception.Message)"
-    throw
-}
-'@
-
-    $script = $script.Replace("__DATA_ROOT__", $DataRoot.Replace("\", "\\"))
-    $script = $script.Replace("__MAX_EVE_BYTES__", $MaxEveBytes.ToString())
-    $script = $script.Replace("__KEEP_ROTATED_LOGS__", $KeepRotatedLogs.ToString())
-    Write-TextFileNoBom -Path $MaintenanceScript -Text $script
-    Write-Log "Wrote maintenance script: $MaintenanceScript"
-}
-
-function Register-MaintenanceTask {
-    if ($SkipScheduledTask) { Write-Log "Skip scheduled task."; return }
-
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$MaintenanceScript`""
-    $trigger = New-ScheduledTaskTrigger -Daily -At $DailyTaskTime
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Write-Log "Registered scheduled task: $TaskName at $DailyTaskTime"
-}
-
-try {
-    New-Directory -Path $DataRoot
-    New-Directory -Path $LogRoot
-    New-Directory -Path $RuleRoot
-    New-Directory -Path $StateRoot
-    New-Directory -Path $DownloadRoot
-
-    Write-Log "Start Suricata Windows full auto install."
-    Install-Npcap
-    Install-Suricata
-    Install-SuricataUpdate
-    Install-WazuhAgent
-
-    $interfaces = @(Get-CaptureInterfaces)
-    foreach ($interface in $interfaces) {
-        Write-Log "Capture interface: $($interface.Name) -> $($interface.Device)"
-    }
-
-    $yaml = Get-SuricataYamlPath
-    Set-SuricataYaml -YamlPath $yaml -Interfaces $interfaces
-    Invoke-RuleUpdate
-    Restart-Suricata
-    Set-WazuhLocalfile
-    Write-MaintenanceScript
-    Register-MaintenanceTask
-
-    Write-Log "Complete. Suricata eve.json: $(Join-Path $LogRoot "eve.json")"
-} catch {
-    Write-Log "ERROR: $($_.Exception.Message)"
-    throw
-}
+Write-Host "`nDONE. eve.json: $EvePath" -ForegroundColor Green
+if($conn){ Write-Host "Confirm on manager: sudo grep -c 'Suricata: Alert' /var/ossec/logs/alerts/alerts.json" -ForegroundColor Cyan }

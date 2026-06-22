@@ -1,100 +1,67 @@
 # suricata-win
 
-## What the installer does (step by step)
+Auto-install Suricata 8.0.5 on Windows with Wazuh Agent integration.
 
-`Install-Suricata-Full-Auto.ps1` runs as Administrator with `StrictMode` and `Stop` error behavior. It logs to `C:\ProgramData\Suricata\install.log`.
+## Script
 
-### 1. Prepare data directories
-Creates these paths under `C:\ProgramData\Suricata\`:
-- `log\`        — Suricata eve.json output
-- `rules\`      — rule files written by `suricata-update`
-- `state\`      — `suricata-update` cache/index
-- `downloads\`  — cached installers (Npcap exe, Suricata MSI)
+`suricata-install.ps1` (Admin PowerShell).
 
-### 2. Install Npcap (silent)
-- Skipped if `-SkipNpcap`.
-- Checks uninstall registry for an existing Npcap entry; if absent, downloads `https://npcap.com/dist/npcap-1.82.exe` and runs it with `/S /winpcap_mode=yes`.
-- Required for Suricata packet capture on Windows.
+## What it does (step by step)
 
-### 3. Install Suricata (MSI, silent)
-- Skipped if `-SkipSuricata`.
-- Detects existing `suricata.exe` via `Get-Command` and a recursive search under `C:\Program Files*`.
-- If missing, downloads the MSI from `https://www.openinfosecfoundation.org/download/windows/Suricata-7.0.11-1-64bit.msi` and runs `msiexec /i ... /qn /norestart /L*v suricata-msi.log`.
+1. **Prepare data dirs** under `C:\ProgramData\Suricata\`: `log\`, `rules\`, `state\`, `downloads\`.
+2. **Install Npcap** (interactive wizard — free build has no silent mode). Skipped with `-SkipNpcap`.
+3. **Install Suricata** via MSI 8.0.5. Local MSI preferred (`-SuricataMsiPath` or `$PSScriptRoot\Suricata-8.0.5-1-64bit.msi`); URL download as fallback.
+4. **Install `suricata-update`** via pip (Python auto-installed via winget if missing). Skipped silently if neither Python nor winget available.
+5. **Install Wazuh Agent** if `-WazuhManager <ip>` is set. Enrolls via `agent-auth`, forces `<address>` in `ossec.conf`. Default empty → skipped.
+6. **Detect capture NIC** (`Get-NetAdapter -Physical`, virtual denylist). Override with `-CaptureInterfaceName`.
+7. **Patch `suricata.yaml`** (BOM-less UTF-8, single-quoted paths): `default-log-dir`, `default-rule-path`. Self-heals from intact `.bak` if YAML looks truncated.
+8. **Pull ET Open rules** directly from `https://rules.emergingthreats.net/open/suricata-<ver>/` with fallback to `suricata-7.0.16/` if the version-specific directory is empty. Defender exclusion added for `$RuleRoot` + `$DownloadRoot`. Runs `suricata -T` non-fatal config test.
+9. **Create/fix Suricata service**. If `--service-install` writes an unquoted binPath, force quoted `ImagePath` via registry. Throws if service does not reach `Running`.
+10. **Bind eve.json to Wazuh** in `ossec.conf`. Strips any pre-existing Suricata `<localfile>` block before inserting. Skipped with `-SkipWazuhConfig`.
+11. **Write `Suricata-Maintenance.ps1`** (BOM-less UTF-8).
+12. **Register daily task** `Suricata Daily Update And Log Rotation` as SYSTEM, daily at `-DailyTaskTime` (default `13:00`). Skipped with `-SkipScheduledTask`.
 
-### 4. Detect physical capture interfaces
-- Calls `Get-NetAdapter -Physical`.
-- Filters by name/description against a denylist of virtual adapters: `virtual|vmware|virtualbox|hyper-v|docker|veth|vethernet|loopback|npcap loopback|wi-fi direct|bluetooth|tap|tun|wireguard|zerotier|tailscale|hamachi|isatap|teredo`.
-- Prefers adapters that are `Up`; falls back to all physical if none are up.
-- Sorts by link speed (descending) and maps each adapter to `\Device\NPF_{<InterfaceGuid>}`.
+## Maintenance script daily run
 
-### 5. Patch `suricata.yaml`
-- Backs the original file up as `suricata.yaml.<timestamp>.bak`.
-- Sets:
-  - `default-log-dir: "C:\ProgramData\Suricata\log"`
-  - `default-rule-path: "C:\ProgramData\Suricata\rules"`
-- Replaces the `pcap:` block with one entry per detected interface (`threads: auto`, `promisc: yes`, `checksum-checks: auto`).
-- Enables the `eve-log` block and forces its `filename:` to `eve.json`.
+1. Update ET Open rules (same version-flexible URL fallback).
+2. If `eve.json` ≥ `-MaxEveBytes` (default `2GB`):
+   - Stop Suricata.
+   - Shift `eve.json.<n>` → `eve.json.<n+1>`.
+   - Delete beyond `-KeepRotatedLogs` (default `3`).
+   - Move `eve.json` → `eve.json.1`.
+   - Restart Suricata.
 
-### 6. Install `suricata-update`
-- Skipped if already on `PATH`.
-- If Python is missing, installs `Python.Python.3.12` via `winget` (silent, accepting agreements).
-- Upgrades `pip`, then `pip install --upgrade suricata-update`.
+## Parameters
 
-### 7. Pull initial ET Open rules
-- Runs `suricata-update update-sources` (tolerates non-zero exit).
-- Enables the `et/open` source.
-- Runs `suricata-update --suricata-conf <yaml> --no-test --output <RuleRoot>`.
-
-### 8. Start/restart the Suricata service
-- If `Suricata` service exists, restarts it.
-- Otherwise runs `suricata.exe --service-install -c <yaml> -i <first-interface>` and starts the service.
-- Throws if the service still cannot be found.
-
-### 9. Bind eve.json to Wazuh Agent
-- Skipped if `-SkipWazuhConfig`.
-- Locates `ossec.conf` at `C:\Program Files (x86)\ossec-agent\ossec.conf` or `C:\Program Files\ossec-agent\ossec.conf` (or `-WazuhConf` if passed).
-- Backs the file up.
-- Inserts a `<localfile>` block (json format, eve.json path) just before `</ossec_config>`. No-op if the path is already present.
-- Restarts `WazuhSvc` if present.
-
-### 10. Write the maintenance script
-- Drops `C:\ProgramData\Suricata\Suricata-Maintenance.ps1` with these placeholders filled in:
-  - `__DATA_ROOT__` → `C:\ProgramData\Suricata`
-  - `__MAX_EVE_BYTES__` → 2GB (or `-MaxEveBytes`)
-  - `__KEEP_ROTATED_LOGS__` → 3 (or `-KeepRotatedLogs`)
-- The maintenance script does, every run:
-  1. `suricata-update update-sources`
-  2. `suricata-update enable-source et/open`
-  3. `suricata-update --suricata-conf <yaml> --no-test --output <rules>`
-  4. Restart the Suricata service.
-  5. If `eve.json` ≥ limit, stop Suricata, rotate `eve.json` → `eve.json.1`, shift older archives up to `eve.json.<Keep>`, delete the oldest beyond `Keep`, then restart Suricata.
-- Logs to `C:\ProgramData\Suricata\maintenance.log`.
-
-### 11. Register the daily scheduled task
-- Skipped if `-SkipScheduledTask`.
-- Task name: `Suricata Daily Update And Log Rotation`.
-- Trigger: daily at `-DailyTaskTime` (default `13:00`).
-- Runs `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <maintenance script>` as `SYSTEM` with highest privileges, `StartWhenAvailable`, ignore new instances, 2-hour time limit.
-
-### 12. Finish
-- Logs the final `eve.json` path. Any thrown error is logged and re-raised.
-
-## Default parameters (overridable)
-
-| Param | Default |
-| --- | --- |
-| `-SuricataMsiUrl` | `https://www.openinfosecfoundation.org/download/windows/Suricata-7.0.11-1-64bit.msi` |
-| `-NpcapUrl` | `https://npcap.com/dist/npcap-1.82.exe` |
-| `-InstallRoot` | `C:\Program Files\Suricata` |
-| `-DataRoot` | `C:\ProgramData\Suricata` |
-| `-WazuhConf` | autodetect |
-| `-MaxEveBytes` | `2GB` |
-| `-KeepRotatedLogs` | `3` |
-| `-DailyTaskTime` | `03:15` |
-| `-SkipNpcap` / `-SkipSuricata` / `-SkipWazuhConfig` / `-SkipScheduledTask` | off |
+| Param | Default | Notes |
+| --- | --- | --- |
+| `-SuricataMsiUrl` | `https://www.openinfosecfoundation.org/download/windows/Suricata-8.0.5-1-64bit.msi` | |
+| `-SuricataMsiPath` | `""` | Local MSI; wins over URL |
+| `-NpcapUrl` | `https://npcap.com/dist/npcap-1.82.exe` | |
+| `-InstallRoot` | `C:\Program Files\Suricata` | |
+| `-DataRoot` | `C:\ProgramData\Suricata` | |
+| `-WazuhConf` | autodetect | Override `ossec.conf` path |
+| `-WazuhManager` | `""` | Set IP to install+enroll Wazuh Agent |
+| `-WazuhAgentMsiUrl` | `https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.5-1.msi` | |
+| `-WazuhAgentName` | `$env:COMPUTERNAME` | |
+| `-CaptureInterfaceName` | `""` | Override NIC selection (e.g. `"VMware Network Adapter VMnet8"`) |
+| `-MaxEveBytes` | `2GB` | Rotation threshold |
+| `-KeepRotatedLogs` | `3` | Max `eve.json.N` kept |
+| `-DailyTaskTime` | `13:00` | Daily task trigger |
+| `-SkipNpcap` / `-SkipSuricata` / `-SkipWazuhAgentInstall` / `-SkipWazuhConfig` / `-SkipScheduledTask` | off | |
 
 ## One-line installer
+
+Downloads `suricata-install.ps1` from `git-home` branch and runs it.
 
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $branch="git-home"; $url="https://raw.githubusercontent.com/yekyawhan/wazuh/$branch/suricata-win/suricata-install.ps1"; Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\suricata-install.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\suricata-install.ps1"
 ```
+
+## Notes
+
+- Npcap free build cannot silent-install. The wizard runs interactively and the script waits.
+- `suricata-update` is installed for plan compliance but is broken on Windows (Errno 13). Rule updates use the direct ET Open tarball path.
+- ET Open rules fallback: tries `suricata-<detected-version>/`, falls back to `suricata-7.0.16/`.
+- MSI `8.0.5` is downloaded from OISF. Place `Suricata-8.0.5-1-64bit.msi` next to the script for offline install (filename must match exactly).
+- Logs: `install.log` and `maintenance.log` under `$DataRoot`. BOM-less UTF-8.

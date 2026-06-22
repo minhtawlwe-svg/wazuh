@@ -279,7 +279,7 @@ function Install-Suricata {
         $localCandidates += $SuricataMsiPath
     }
     if ($PSScriptRoot) {
-        $localCandidates += (Join-Path $PSScriptRoot "Suricata-7.0.16-1-64bit.msi")
+        $localCandidates += (Join-Path $PSScriptRoot "Suricata-8.0.5-1-64bit.msi")
     }
     $installer = $null
     foreach ($candidate in $localCandidates) {
@@ -441,16 +441,36 @@ function Invoke-RuleUpdate {
     }
 
     $exe = Get-SuricataExePath
-    $version = "7.0.16"
+    $version = "8.0.5"
     try {
         $vout = (& $exe -V 2>&1 | Out-String)
         if ($vout -match "version\s+([0-9]+\.[0-9]+\.[0-9]+)") { $version = $Matches[1] }
     } catch { }
     Write-Log "Suricata version detected: $version"
 
-    $url = "https://rules.emergingthreats.net/open/suricata-$version/emerging.rules.tar.gz"
+    # Try the version-specific ET Open directory first; if it returns nothing
+    # (404 / empty archive on the ET Open side), fall back to the 7.0.16 archive
+    # which has the widest historical coverage.
     $tar = Join-Path $DownloadRoot "emerging.rules.tar.gz"
-    Invoke-Download -Uri $url -OutFile $tar
+    $candidates = @(
+        "https://rules.emergingthreats.net/open/suricata-$version/emerging.rules.tar.gz",
+        "https://rules.emergingthreats.net/open/suricata-7.0.16/emerging.rules.tar.gz"
+    )
+    $downloaded = $false
+    foreach ($candidate in $candidates) {
+        try {
+            Write-Log "Try rules URL: $candidate"
+            Invoke-Download -Uri $candidate -OutFile $tar
+            if ((Test-Path -LiteralPath $tar) -and ((Get-Item $tar).Length -gt 1024)) {
+                $downloaded = $true
+                Write-Log "Got rules from: $candidate"
+                break
+            }
+        } catch {
+            Write-Log "Rules URL failed: $($_.Exception.Message)"
+        }
+    }
+    if (-not $downloaded) { throw "Could not download ET Open rules from any candidate URL." }
 
     $extract = Join-Path $StateRoot "rules-extract"
     if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
@@ -600,19 +620,38 @@ function Update-SuricataRules {
     $exe = Get-SuricataExe
     if (-not $exe) { Write-MaintLog "suricata.exe not found. Skip rule update."; return }
 
-    $ver = "7.0.16"
+    $ver = "8.0.5"
     try { $vout = (& $exe -V 2>&1 | Out-String); if ($vout -match "version\s+([0-9]+\.[0-9]+\.[0-9]+)") { $ver = $Matches[1] } } catch { }
 
     New-Item -ItemType Directory -Force $DownloadRoot | Out-Null
     New-Item -ItemType Directory -Force $RuleRoot | Out-Null
     $tar = Join-Path $DownloadRoot "emerging.rules.tar.gz"
-    $rurl = "https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz"
-    try { Invoke-WebRequest -Uri $rurl -OutFile $tar -UseBasicParsing }
-    catch {
-        $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
-        if ($curl) { & $curl -L --fail --ssl-no-revoke --retry 2 -o $tar $rurl }
+    $rurls = @(
+        "https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz",
+        "https://rules.emergingthreats.net/open/suricata-7.0.16/emerging.rules.tar.gz"
+    )
+    $downloaded = $false
+    foreach ($rurl in $rurls) {
+        try {
+            Invoke-WebRequest -Uri $rurl -OutFile $tar -UseBasicParsing -MaximumRedirection 5
+            if ((Test-Path -LiteralPath $tar) -and ((Get-Item $tar).Length -gt 1024)) {
+                Write-MaintLog "Got rules from: $rurl"
+                $downloaded = $true
+                break
+            }
+        } catch {
+            $curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
+            if ($curl) {
+                & $curl -L --fail --ssl-no-revoke --retry 2 -o $tar $rurl
+                if ((Test-Path -LiteralPath $tar) -and ((Get-Item $tar).Length -gt 1024)) {
+                    Write-MaintLog "Got rules from (curl): $rurl"
+                    $downloaded = $true
+                    break
+                }
+            }
+        }
     }
-    if (-not (Test-Path -LiteralPath $tar) -or (Get-Item $tar).Length -le 0) { Write-MaintLog "Rule download failed. Skip."; return }
+    if (-not $downloaded) { Write-MaintLog "Rule download failed for all candidates. Skip."; return }
 
     $extract = Join-Path $StateRoot "rules-extract"
     if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }

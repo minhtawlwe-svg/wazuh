@@ -121,6 +121,8 @@ rm -rf /etc/suricata
 rm -rf /var/lib/suricata
 rm -rf /var/log/suricata
 rm -f /var/log/suricata-install.log
+rm -f /var/log/suricata-maintenance.log
+rm -f /var/log/suricata-uninstall.log
 
 # -------------------------------------
 # Remove systemd units + maintenance script
@@ -141,9 +143,18 @@ rm -f /etc/logrotate.d/suricata
 # Remove OISF repository
 # -------------------------------------
 log "Removing OISF repository..."
-rm -f /etc/apt/sources.list.d/oisf-suricata.list
-rm -f /usr/share/keyrings/oisf.gpg
-rm -f /etc/yum.repos.d/oisf-suricata.repo
+# Launchpad PPA: add-apt-repository --remove ppa:oisf/suricata-stable (or rm the source list)
+if command -v add-apt-repository >/dev/null 2>&1; then
+    add-apt-repository --remove -y ppa:oisf/suricata-stable 2>/dev/null || true
+fi
+rm -f /etc/apt/sources.list.d/oisf-suricata-stable.list
+rm -f /etc/apt/sources.list.d/oisf-ubuntu-suricata-stable-*.list
+rm -f /etc/apt/trusted.gpg.d/oisf*
+rm -f /usr/share/keyrings/oisf*
+# EPEL (only if we explicitly added it)
+if rpm -q epel-release >/dev/null 2>&1; then
+    log "Note: epel-release is installed. Leaving in place (other packages may depend on it)."
+fi
 if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y || true
 fi

@@ -15,10 +15,8 @@ IFS=$'\n\t'
 WAZUH_MANAGER=""
 INTERFACE_OVERRIDE=""
 WAZUH_CONF="/var/ossec/etc/ossec.conf"
-SURICATA_REPO_URL_DEB="https://packages.openinfosecfoundation.org"
-SURICATA_REPO_URL_RPM="https://packages.openinfosecfoundation.org"
 SURICATA_YAML="/etc/suricata/suricata.yaml"
-RULE_DIR="/var/lib/suricata/rules"
+RULE_DIR="/etc/suricata/rules"
 LOG_DIR="/var/log/suricata"
 EVE_LOG="${LOG_DIR}/eve.json"
 MAINT_SCRIPT="/usr/local/sbin/suricata-maintenance.sh"
@@ -79,7 +77,7 @@ while [ $# -gt 0 ]; do
         -WazuhManager)        WAZUH_MANAGER="${2:-}"; shift 2 ;;
         -Interface)           INTERFACE_OVERRIDE="${2:-}"; shift 2 ;;
         -WazuhConf)           WAZUH_CONF="${2:-}"; shift 2 ;;
-        -SuricataRepoUrl)     SURICATA_REPO_URL_DEB="${2:-}"; SURICATA_REPO_URL_RPM="${2:-}"; shift 2 ;;
+        -SuricataRepoUrl)     SURICATA_REPO_URL="${2:-}"; shift 2 ;;
         -MaxEveBytes)         MAX_EVE_BYTES="${2:-}"; shift 2 ;;
         -KeepRotatedLogs)     KEEP_ROTATED_LOGS="${2:-}"; shift 2 ;;
         -DailyTaskTime)       DAILY_TASK_TIME="${2:-}"; shift 2 ;;
@@ -160,29 +158,39 @@ install_suricata() {
         log "Adding OISF repository and installing Suricata..."
         case "$PKG_FAMILY" in
             apt)
-                ensure_dir /usr/share/keyrings
-                if [ ! -f /usr/share/keyrings/oisf.gpg ]; then
-                    download "${SURICATA_REPO_URL_DEB}/keyring.gpg" /tmp/oisf.gpg \
-                        || die "Cannot fetch OISF keyring"
-                    gpg --dearmor < /tmp/oisf.gpg > /usr/share/keyrings/oisf.gpg \
-                        || die "gpg dearmor failed"
-                    rm -f /tmp/oisf.gpg
+                # OISF ships Suricata on Launchpad PPA ppa:oisf/suricata-stable
+                # (the packages.openinfosecfoundation.org domain does not exist).
+                # Mirror the Wazuh PoC: https://documentation.wazuh.com/current/proof-of-concept-guide/integrate-network-ids-suricata.html
+                if ! apt-cache policy suricata 2>/dev/null | grep -q 'oisf/suricata-stable'; then
+                    log "Adding OISF Launchpad PPA: ppa:oisf/suricata-stable"
+                    DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common >/dev/null 2>&1 || true
+                    add-apt-repository -y ppa:oisf/suricata-stable || die "add-apt-repository failed"
+                    apt-get update -y || die "apt-get update failed"
                 fi
-                echo "deb [signed-by=/usr/share/keyrings/oisf.gpg] ${SURICATA_REPO_URL_DEB}/${DISTRO_ID} ${VERSION_CODENAME:-stable} main" \
-                    > /etc/apt/sources.list.d/oisf-suricata.list
-                apt-get update -y || die "apt-get update failed"
-                DEBIAN_FRONTEND=noninteractive apt-get install -y suricata suricata-update \
+                DEBIAN_FRONTEND=noninteractive apt-get install -y suricata \
                     || die "apt-get install suricata failed"
+                # suricata-update is a separate Python package; best-effort.
+                # Not required: the installer uses the direct ET Open tarball path.
+                if command -v pip3 >/dev/null 2>&1; then
+                    pip3 install --quiet --upgrade --break-system-packages suricata-update 2>/dev/null || \
+                    pip3 install --quiet --upgrade suricata-update 2>/dev/null || \
+                        log "pip install suricata-update failed (continuing on direct tarball path)"
+                elif command -v pip >/dev/null 2>&1; then
+                    pip install --quiet --upgrade suricata-update 2>/dev/null || \
+                        log "pip install suricata-update failed (continuing on direct tarball path)"
+                else
+                    log "pip not present; skipping suricata-update (direct tarball path used instead)"
+                fi
                 ;;
             rpm)
-                cat > /etc/yum.repos.d/oisf-suricata.repo <<EOF
-[oisf]
-name=OISF Suricata
-baseurl=${SURICATA_REPO_URL_RPM}/${DISTRO_ID}/
-enabled=1
-gpgcheck=1
-gpgkey=${SURICATA_REPO_URL_RPM}/keyring.gpg
-EOF
+                # Suricata is in EPEL on RHEL/Rocky/Fedora (no separate repo needed).
+                if ! rpm -q epel-release >/dev/null 2>&1; then
+                    log "Enabling EPEL..."
+                    dnf install -y epel-release elrepo-release >/dev/null 2>&1 || \
+                    dnf install -y epel-release >/dev/null 2>&1 || \
+                    yum install -y epel-release >/dev/null 2>&1 || \
+                        die "Cannot enable EPEL"
+                fi
                 dnf install -y suricata suricata-update \
                     || yum install -y suricata suricata-update \
                     || die "Package install failed (tried dnf and yum)"
@@ -285,7 +293,7 @@ patch_yaml() {
     # Single-line path keys only. Do NOT regex af-packet or eve-log blocks
     # (a greedy regex previously truncated the whole file).
     yaml_set_kv "$yaml" "default-log-dir"   "/var/log/suricata/"
-    yaml_set_kv "$yaml" "default-rule-path" "/var/lib/suricata/rules/"
+    yaml_set_kv "$yaml" "default-rule-path" "/etc/suricata/rules/"
 
     log "Patched suricata.yaml (default-log-dir, default-rule-path): $yaml"
 }

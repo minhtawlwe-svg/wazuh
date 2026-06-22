@@ -11,8 +11,8 @@ Runs as **root** with `set -euo pipefail`. Logs to `/var/log/suricata-install.lo
 - Reads `/etc/os-release`; accepts Debian/Ubuntu (`ID_LIKE=*debian*`) and RHEL/CentOS/Rocky/Fedora families. Aborts on anything else.
 
 ### 2. Install Suricata + suricata-update
-- Debian family: writes `/etc/apt/sources.list.d/oisf-suricata.list` (signed by `/usr/share/keyrings/oisf.gpg`), then `apt-get update && apt-get install -y suricata suricata-update`.
-- RHEL family: writes `/etc/yum.repos.d/oisf-suricata.repo`, then `dnf install -y suricata suricata-update` (falls back to `yum`).
+- **Debian/Ubuntu** family: mirrors the Wazuh PoC — `add-apt-repository -y ppa:oisf/suricata-stable`, then `apt-get install -y suricata`. `suricata-update` is best-effort `pip install` (not required — direct ET Open tarball path is used).
+- **RHEL/Rocky/Fedora** family: enables `epel-release`, then `dnf install -y suricata suricata-update` (falls back to `yum`). Suricata is in EPEL — no separate OISF repo needed.
 - Skipped if `suricata` is already on PATH (or `-SkipSuricata`).
 
 ### 3. Detect capture interfaces
@@ -25,7 +25,7 @@ Runs as **root** with `set -euo pipefail`. Logs to `/var/log/suricata-install.lo
 - Backs up to `suricata.yaml.YYYYMMDDHHMMSS.bak`.
 - Replaces **only** the two safe key/value lines:
   - `default-log-dir: /var/log/suricata/`
-  - `default-rule-path: /var/lib/suricata/rules/`
+  - `default-rule-path: /etc/suricata/rules/`
 - **Never** regex-rewrites `af-packet:` or `eve-log:` blocks (a greedy regex previously truncated the whole file).
 
 ### 5. Pull initial ET Open rules
@@ -95,7 +95,7 @@ Runs as **root** with `set -euo pipefail`. Logs to `/var/log/suricata-install.lo
 | `-WazuhManager` | (empty — agent assumed installed) |
 | `-Interface` | auto-detect (first physical, sorted by speed) |
 | `-WazuhConf` | `/var/ossec/etc/ossec.conf` |
-| `-SuricataRepoUrl` | `https://packages.openinfosecfoundation.org` |
+| `-SuricataRepoUrl` | (unused — Suricata comes from `ppa:oisf/suricata-stable` on Debian/Ubuntu and EPEL on RHEL family) |
 | `-MaxEveBytes` | `2147483648` (2 GB) |
 | `-KeepRotatedLogs` | `3` |
 | `-DailyTaskTime` | `03:15` |
@@ -148,7 +148,7 @@ Add `--purge-wazuh` to also remove the Wazuh agent (and `/var/ossec`) in the sam
 - **Root** access.
 - **Existing Wazuh agent** installed and enrolled (this installer only patches `ossec.conf` — it does not enroll).
 - **Network** access to:
-  - `https://packages.openinfosecfoundation.org` (Suricata packages)
+  - `https://launchpad.net` (Launchpad PPA `ppa:oisf/suricata-stable`) OR EPEL mirror for RHEL family
   - `https://rules.emergingthreats.net` (ET Open tarball)
 - **Kernel** with `AF_PACKET` (any modern Linux).
 

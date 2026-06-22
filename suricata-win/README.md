@@ -73,7 +73,7 @@ Creates these paths under `C:\ProgramData\Suricata\`:
 ### 11. Register the daily scheduled task
 - Skipped if `-SkipScheduledTask`.
 - Task name: `Suricata Daily Update And Log Rotation`.
-- Trigger: daily at `-DailyTaskTime` (default `03:15`).
+- Trigger: daily at `-DailyTaskTime` (default `13:00`).
 - Runs `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <maintenance script>` as `SYSTEM` with highest privileges, `StartWhenAvailable`, ignore new instances, 2-hour time limit.
 
 ### 12. Finish

@@ -22,7 +22,7 @@
 # =====================================================================
 [CmdletBinding()]
 param(
-    [string]$SuricataMsiUrl = "https://www.openinfosecfoundation.org/download/windows/Suricata-7.0.16-1-64bit.msi",
+    [string]$SuricataMsiUrl = "https://www.openinfosecfoundation.org/download/windows/Suricata-8.0.5-1-64bit.msi",
     [string]$SuricataMsiPath = "",
     [string]$NpcapUrl = "https://npcap.com/dist/npcap-1.82.exe",
     [string]$InstallRoot = "C:\Program Files\Suricata",

@@ -4,12 +4,11 @@ set -euo pipefail
 
 # =====================================
 # Suricata Linux Uninstaller (SOC)
-# Reverse of suricata-linux/install.sh
+# Reverse of install.sh (Suricata only, Wazuh-safe)
 # =====================================
 
 LOG_FILE="/var/log/suricata-uninstall.log"
 FORCE_MODE=false
-PURGE_WAZUH=0
 
 # -------------------------------------
 # Parse arguments
@@ -18,10 +17,6 @@ for arg in "$@"; do
     case $arg in
         --force|-f)
             FORCE_MODE=true
-            shift
-            ;;
-        --purge-wazuh)
-            PURGE_WAZUH=1
             shift
             ;;
     esac
@@ -56,15 +51,11 @@ if [ "$FORCE_MODE" = false ]; then
     echo "[WARNING] This will remove:"
     echo "  - Suricata + suricata-update packages"
     echo "  - /etc/suricata config tree"
-    echo "  - /var/log/suricata logs (eve.json + archives)"
+    echo "  - /var/log/suricata logs"
     echo "  - /var/lib/suricata rules + state"
     echo "  - OISF repository (APT or YUM)"
     echo "  - systemd timer (suricata-maintenance.timer)"
     echo "  - logrotate rule (/etc/logrotate.d/suricata)"
-    echo "  - Wazuh ossec.conf Suricata <localfile> block"
-    if [ "$PURGE_WAZUH" -eq 1 ]; then
-        echo "  - Wazuh Agent package + /var/ossec  (--purge-wazuh)"
-    fi
     echo ""
     read -rp "Type DELETE to continue: " CONFIRM
     if [ "$CONFIRM" != "DELETE" ]; then
@@ -90,14 +81,11 @@ if systemctl list-unit-files suricata.service >/dev/null 2>&1; then
     systemctl disable suricata || true
 fi
 
-# -------------------------------------
-# Kill lingering processes
-# -------------------------------------
 log "Killing remaining Suricata processes..."
 pkill -9 -f suricata || true
 
 # -------------------------------------
-# Purge packages (Debian-family)
+# Purge packages
 # -------------------------------------
 if command -v apt-get >/dev/null 2>&1; then
     if dpkg -l 2>/dev/null | grep -q suricata; then
@@ -105,7 +93,6 @@ if command -v apt-get >/dev/null 2>&1; then
         apt-get purge -y suricata suricata-update || true
         apt-get autoremove -y
     fi
-# RHEL-family
 elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
     if rpm -q suricata >/dev/null 2>&1; then
         log "Removing Suricata packages (rpm)..."
@@ -143,7 +130,6 @@ rm -f /etc/logrotate.d/suricata
 # Remove OISF repository
 # -------------------------------------
 log "Removing OISF repository..."
-# Launchpad PPA: add-apt-repository --remove ppa:oisf/suricata-stable (or rm the source list)
 if command -v add-apt-repository >/dev/null 2>&1; then
     add-apt-repository --remove -y ppa:oisf/suricata-stable 2>/dev/null || true
 fi
@@ -151,25 +137,25 @@ rm -f /etc/apt/sources.list.d/oisf-suricata-stable.list
 rm -f /etc/apt/sources.list.d/oisf-ubuntu-suricata-stable-*.list
 rm -f /etc/apt/trusted.gpg.d/oisf*
 rm -f /usr/share/keyrings/oisf*
-# EPEL (only if we explicitly added it)
-if rpm -q epel-release >/dev/null 2>&1; then
-    log "Note: epel-release is installed. Leaving in place (other packages may depend on it)."
-fi
+rm -f /etc/yum.repos.d/oisf-suricata.repo
 if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y || true
 fi
 
 # -------------------------------------
-# Strip Suricata <localfile> from ossec.conf
+# Strip Suricata <localfile> from ossec.conf (Wazuh binding removal)
 # -------------------------------------
 if [ -r /var/ossec/etc/ossec.conf ]; then
-    log "Stripping Suricata <localfile> from ossec.conf..."
+    log "Checking if ossec.conf needs cleaning..."
     OSSEC_CONF=/var/ossec/etc/ossec.conf
-    ts=$(date +%Y%m%d%H%M%S)
-    cp -a "$OSSEC_CONF" "${OSSEC_CONF}.${ts}.uninst.bak"
-    if command -v python3 >/dev/null 2>&1; then
-        tmp=$(mktemp)
-        python3 - "$OSSEC_CONF" "$tmp" <<'PY'
+    # Only if eve.json reference actually exists
+    if grep -q "eve.json" "$OSSEC_CONF"; then
+        log "Stripping Suricata <localfile> from ossec.conf..."
+        ts=$(date +%Y%m%d%H%M%S)
+        cp -a "$OSSEC_CONF" "${OSSEC_CONF}.${ts}.uninst.bak"
+        if command -v python3 >/dev/null 2>&1; then
+            tmp=$(mktemp)
+            python3 - "$OSSEC_CONF" "$tmp" <<'PY'
 import re, sys
 src, dst = sys.argv[1], sys.argv[2]
 with open(src, 'r', encoding='utf-8') as f:
@@ -179,45 +165,22 @@ new = pat.sub('', content)
 with open(dst, 'w', encoding='utf-8') as f:
     f.write(new)
 PY
-        mv "$tmp" "$OSSEC_CONF"
-        if systemctl list-unit-files wazuh-agent.service >/dev/null 2>&1; then
-            systemctl restart wazuh-agent || true
+            mv "$tmp" "$OSSEC_CONF"
+            # NOTE: We do NOT restart wazuh-agent here to be safe and avoid service disruption
+            log "Binding removed from ossec.conf. User should check and restart wazuh-agent manually if needed."
+        else
+            log "python3 unavailable — cannot clean ossec.conf automatically."
         fi
     else
-        log "python3 unavailable — leaving ossec.conf untouched."
+        log "ossec.conf binding not found — skip cleaning."
     fi
-fi
-
-# -------------------------------------
-# Optional: purge Wazuh agent
-# -------------------------------------
-if [ "$PURGE_WAZUH" -eq 1 ]; then
-    log "Purging Wazuh agent (--purge-wazuh)..."
-    if systemctl list-unit-files wazuh-agent.service >/dev/null 2>&1; then
-        systemctl stop wazuh-agent || true
-        systemctl disable wazuh-agent || true
-    fi
-    pkill -9 -f wazuh || true
-    pkill -9 -f ossec || true
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get purge -y wazuh-agent || true
-        apt-get autoremove -y
-    elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
-        (dnf remove -y wazuh-agent || yum remove -y wazuh-agent) || true
-    fi
-    rm -rf /var/ossec
-    rm -f /etc/apt/sources.list.d/wazuh.list
-    rm -f /usr/share/keyrings/wazuh.gpg
 fi
 
 # -------------------------------------
 # Verify removal
 # -------------------------------------
 if command -v suricata >/dev/null 2>&1; then
-    log "[WARNING] suricata binary still on PATH — check for alternative install."
-fi
-if [ -d /etc/suricata ] || [ -d /var/lib/suricata ]; then
-    log "[WARNING] Some Suricata directories still present."
+    log "[WARNING] suricata binary still on PATH."
 fi
 
 log "Suricata Linux uninstall complete."

@@ -54,7 +54,7 @@ Runs as **root** with `set -euo pipefail`. Logs to `/var/log/suricata-install.lo
 
 ### 8. Write the maintenance script
 - Drops `/usr/local/sbin/suricata-maintenance.sh` (executable, 0755).
-- Placeholders filled in: `__LOG_DIR__` → `/var/log/suricata`, `__RULE_DIR__` → `/var/lib/suricata/rules`, `__MAX_EVE_BYTES__` → `-MaxEveBytes`, `__KEEP_ROTATED_LOGS__` → `-KeepRotatedLogs`.
+- Placeholders filled in: `__LOG_DIR__` → `/var/log/suricata`, `__RULE_DIR__` → `/etc/suricata/rules`, `__MAX_EVE_BYTES__` → `-MaxEveBytes`, `__KEEP_ROTATED_LOGS__` → `-KeepRotatedLogs`.
 - Every run:
   1. Re-download ET Open tarball (version-matched).
   2. Re-extract and re-merge rules.

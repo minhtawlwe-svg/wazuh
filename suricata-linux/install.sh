@@ -379,7 +379,7 @@ with open(src, 'r', encoding='utf-8') as f:
 # Remove any existing <localfile>...</localfile> whose body mentions eve.json
 pat = re.compile(r'<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*', re.DOTALL)
 new = pat.sub('', content)
-block = f'  <localfile>\n    <log_format>json</log_format>\n    <location>{eve}</location>\n  </localfile>\n'
+block = f'    <localfile>\n      <log_format>json</log_format>\n      <location>{eve}</location>\n    </localfile>\n'
 if re.search(r'</ossec_config>', new):
     new = re.sub(r'\s*</ossec_config>\s*$', f'\n{block}</ossec_config>\n', new, count=1)
 else:

@@ -33,7 +33,7 @@ SKIP_SCHEDULED_TASK=0
 # -NonInteractive to suppress prompts for automated/piped runs.
 NON_INTERACTIVE=0
 # Seconds to wait for wazuh-agent to report running before declaring failure.
-WAZUH_START_TIMEOUT=60
+WAZUH_START_TIMEOUT=45
 INSTALL_LOG="/var/log/suricata-install.log"
 # FIX: SURICATA_REPO_URL is accepted but was silently unused; kept for future use
 SURICATA_REPO_URL=""
@@ -826,8 +826,31 @@ PY
             || log "wazuh verify-agent-conf reported issues (see /tmp/ossec-verify.log) — relying on XML check."
     fi
 
+    # CRITICAL: $tmp was created by mktemp as root, so a plain `mv` would leave
+    # ossec.conf owned by root:root. The Wazuh agent runs as the 'wazuh' user and
+    # must be able to read its own config — wrong ownership makes the agent hang
+    # or fail to start (which previously caused false rollbacks). We therefore
+    # preserve the ORIGINAL file's owner, group, and mode across the replacement.
+    local orig_owner orig_group orig_mode
+    orig_owner=$(stat -c '%U' "$WAZUH_CONF" 2>/dev/null || echo "")
+    orig_group=$(stat -c '%G' "$WAZUH_CONF" 2>/dev/null || echo "")
+    orig_mode=$(stat -c '%a' "$WAZUH_CONF" 2>/dev/null || echo "")
+
     mv "$tmp" "$WAZUH_CONF"
-    log "Patched Wazuh ossec.conf -> $EVE_LOG"
+
+    # Restore ownership/permissions captured from the original config.
+    if [ -n "$orig_owner" ] && [ -n "$orig_group" ]; then
+        chown "${orig_owner}:${orig_group}" "$WAZUH_CONF" 2>/dev/null \
+            || log "WARNING: could not restore ${orig_owner}:${orig_group} on $WAZUH_CONF"
+    else
+        # Fallback: Wazuh's config is conventionally owned by wazuh:wazuh.
+        if id wazuh >/dev/null 2>&1; then
+            chown wazuh:wazuh "$WAZUH_CONF" 2>/dev/null || true
+        fi
+    fi
+    [ -n "$orig_mode" ] && chmod "$orig_mode" "$WAZUH_CONF" 2>/dev/null || chmod 640 "$WAZUH_CONF" 2>/dev/null || true
+
+    log "Patched Wazuh ossec.conf -> $EVE_LOG (owner: ${orig_owner:-wazuh}:${orig_group:-wazuh})"
 
     # Restart the agent, then CONFIRM it actually came up. We only roll back if
     # the agent is GENUINELY still down after a final grace check — the agent can
@@ -839,16 +862,16 @@ PY
         else
             # The timed loop didn't observe "up" — but it may simply be slow.
             # Do a final, patient confirmation before deciding to roll back.
-            log "Initial readiness window elapsed; performing final confirmation (up to 60s more)..."
+            log "Initial readiness window elapsed; performing final confirmation (up to 30s more)..."
             local final_wait=0
             local final_ok=0
-            while [ "$final_wait" -lt 60 ]; do
+            while [ "$final_wait" -lt 30 ]; do
                 if wazuh_is_up; then
                     final_ok=1
                     break
                 fi
-                sleep 5
-                final_wait=$((final_wait+5))
+                sleep 3
+                final_wait=$((final_wait+3))
             done
 
             if [ "$final_ok" -eq 1 ]; then
@@ -883,7 +906,7 @@ wazuh_clean_restart() {
         /var/ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
     fi
     systemctl stop wazuh-agent >/dev/null 2>&1 || true
-    sleep 2
+    sleep 1
 
     # 2. Reap orphaned daemons that block a clean start.
     local leftover
@@ -891,7 +914,7 @@ wazuh_clean_restart() {
     if [ -n "$leftover" ]; then
         log "Reaping lingering wazuh processes: $(echo "$leftover" | tr '\n' ' ')"
         pkill -TERM -f '/var/ossec/bin/wazuh-' >/dev/null 2>&1 || true
-        sleep 2
+        sleep 1
         # Force-kill anything still standing.
         pkill -KILL -f '/var/ossec/bin/wazuh-' >/dev/null 2>&1 || true
         sleep 1
@@ -922,14 +945,14 @@ wazuh_clean_restart() {
             systemctl start --no-block wazuh-agent >/dev/null 2>&1 || true
             return 0
         fi
-        sleep 3
-        waited=$((waited+3))
+        sleep 2
+        waited=$((waited+2))
     done
 
     # Last attempt: kick wazuh-control once more.
     if [ -x /var/ossec/bin/wazuh-control ]; then
         /var/ossec/bin/wazuh-control restart >/dev/null 2>&1 || true
-        sleep 5
+        sleep 3
         if wazuh_is_up; then
             log "wazuh-agent started via wazuh-control fallback."
             systemctl start --no-block wazuh-agent >/dev/null 2>&1 || true

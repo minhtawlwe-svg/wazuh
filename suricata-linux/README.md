@@ -113,21 +113,6 @@ Runs as **root** with `set -euo pipefail`. Logs every action to `/var/log/surica
 
 ---
 
-## Usage
-
-### Interactive (recommended for a single sensor)
-
-```bash
-git clone https://github.com/yekyawhan/wazuh.git
-cd wazuh/suricata-linux
-chmod +x install.sh uninstall.sh
-sudo ./install.sh
-```
-
-### Unattended (fleet rollout)
-
-Provide the interface and range as flags, and silence prompts:
-
 ### One-liner
 
 ```bash

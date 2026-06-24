@@ -636,6 +636,15 @@ start_suricata() {
          | grep -q 'LoadState=loaded'; then
         log "WARNING: suricata.service not found in systemd — attempting start anyway."
     fi
+
+    # Fix log ownership BEFORE start. Suricata drops privileges to its run-as
+    # user (typically 'suricata') after init. If eve.json/fast.log/stats.log were
+    # pre-created as root (e.g. by an earlier root-run start), the privilege-
+    # dropped process cannot write them and eve-log silently fails with
+    # "Permission denied" while the SERVICE still reports active. We proactively
+    # chown the whole log dir to the detected run-as user to prevent this.
+    fix_suricata_log_ownership
+
     systemctl daemon-reload || true
     systemctl enable suricata >/dev/null 2>&1 || log "systemctl enable suricata failed (continuing)"
     systemctl restart suricata || die "systemctl restart suricata failed"
@@ -645,6 +654,68 @@ start_suricata() {
     else
         die "Suricata service not active after restart"
     fi
+
+    # CRITICAL: "active" is not sufficient — eve-log can fail to open its file
+    # while the service stays up. Verify the eve-log output actually initialised
+    # and that no permission error was logged on this start.
+    sleep 2
+    local slog="${LOG_DIR}/suricata.log"
+    if [ -r "$slog" ]; then
+        if grep -qiE 'eve-log.*setup failed|Error opening file.*eve\.json|Permission denied' "$slog"; then
+            log "WARNING: Suricata eve-log failed to open its output file (permission/path). Re-applying ownership and restarting once."
+            fix_suricata_log_ownership
+            systemctl restart suricata || die "systemctl restart suricata failed (after ownership fix)"
+            sleep 3
+            if grep -qiE 'eve-log.*setup failed|Error opening file.*eve\.json|Permission denied' "$slog"; then
+                die "Suricata eve-log still cannot open ${EVE_LOG} after ownership fix. Check: ls -la ${LOG_DIR}; run-as user in ${SURICATA_YAML}."
+            fi
+            log "Suricata eve-log initialised after ownership fix."
+        else
+            log "Suricata eve-log output verified (no open errors)."
+        fi
+    fi
+}
+
+# -------------------------------------
+# Ensure the Suricata log directory and any existing log files are owned by the
+# user Suricata drops to. Detects the run-as user from suricata.yaml; falls back
+# to 'suricata' if present, else leaves root (some builds run wholly as root).
+# -------------------------------------
+fix_suricata_log_ownership() {
+    ensure_dir "$LOG_DIR"
+
+    # Detect run-as user from an UNcommented "user:" under a run-as: block.
+    local runas=""
+    runas=$(awk '
+        /^[[:space:]]*run-as:[[:space:]]*$/ {inblk=1; next}
+        inblk==1 && /^[[:space:]]*user:[[:space:]]*/ {
+            gsub(/^[[:space:]]*user:[[:space:]]*/,""); gsub(/[[:space:]].*$/,""); print; exit
+        }
+        inblk==1 && /^[^[:space:]#]/ {inblk=0}
+    ' "$SURICATA_YAML" 2>/dev/null)
+
+    # Fall back to the conventional 'suricata' account if it exists.
+    if [ -z "$runas" ]; then
+        if id suricata >/dev/null 2>&1; then
+            runas="suricata"
+        fi
+    fi
+
+    if [ -z "$runas" ]; then
+        log "No dedicated run-as user found; leaving ${LOG_DIR} ownership as-is (Suricata likely runs as root)."
+        return 0
+    fi
+
+    if ! id "$runas" >/dev/null 2>&1; then
+        log "Configured run-as user '${runas}' does not exist; skipping chown (verify suricata.yaml run-as)."
+        return 0
+    fi
+
+    local grp
+    grp=$(id -gn "$runas" 2>/dev/null || echo "$runas")
+    chown -R "${runas}:${grp}" "$LOG_DIR" 2>/dev/null \
+        && log "Set ownership of ${LOG_DIR} to ${runas}:${grp}." \
+        || log "Could not chown ${LOG_DIR} to ${runas}:${grp} (continuing)."
 }
 
 # -------------------------------------
@@ -758,17 +829,36 @@ PY
     mv "$tmp" "$WAZUH_CONF"
     log "Patched Wazuh ossec.conf -> $EVE_LOG"
 
-    # Restart the agent, then CONFIRM it actually came up. If the new config
-    # somehow prevents startup, restore the backup automatically so we never
-    # leave the agent dead — this is the safety net the first failure lacked.
+    # Restart the agent, then CONFIRM it actually came up. We only roll back if
+    # the agent is GENUINELY still down after a final grace check — the agent can
+    # take 1-3 minutes to fully initialise on a busy host, and rolling back a
+    # config that is actually fine (as happened in testing) is worse than waiting.
     if systemctl list-unit-files wazuh-agent.service >/dev/null 2>&1; then
         if wazuh_clean_restart 2>/tmp/wazuh-restart.log; then
             log "wazuh-agent restarted and active."
         else
-            log "wazuh-agent failed to start with patched config — rolling back ossec.conf."
-            cp -a "${WAZUH_CONF}.${ts}.bak" "$WAZUH_CONF"
-            wazuh_clean_restart >/dev/null 2>&1 || true
-            die "wazuh-agent failed to start; restored backup ${WAZUH_CONF}.${ts}.bak. See /tmp/wazuh-restart.log and /var/ossec/logs/ossec.log"
+            # The timed loop didn't observe "up" — but it may simply be slow.
+            # Do a final, patient confirmation before deciding to roll back.
+            log "Initial readiness window elapsed; performing final confirmation (up to 60s more)..."
+            local final_wait=0
+            local final_ok=0
+            while [ "$final_wait" -lt 60 ]; do
+                if wazuh_is_up; then
+                    final_ok=1
+                    break
+                fi
+                sleep 5
+                final_wait=$((final_wait+5))
+            done
+
+            if [ "$final_ok" -eq 1 ]; then
+                log "wazuh-agent is running after extended wait (${final_wait}s) — patched config is good, NOT rolling back."
+            else
+                log "wazuh-agent still not running after extended wait — rolling back ossec.conf."
+                cp -a "${WAZUH_CONF}.${ts}.bak" "$WAZUH_CONF"
+                wazuh_clean_restart >/dev/null 2>&1 || true
+                die "wazuh-agent failed to start with patched config; restored backup ${WAZUH_CONF}.${ts}.bak. See /tmp/wazuh-restart.log and /var/ossec/logs/ossec.log"
+            fi
         fi
     else
         log "wazuh-agent.service not found — user must restart agent manually."
@@ -809,31 +899,40 @@ wazuh_clean_restart() {
 
     # 3. Start cleanly, then POLL for readiness.
     #
-    # The wazuh-agent unit can exceed systemd's start timeout even on a healthy
-    # start — the daemons initialise over ~20-30s, and systemd may report
-    # "failed (timeout)" while the agent is in fact coming up fine. So we do NOT
-    # trust the exit code of `systemctl start`; we launch non-blocking and poll
-    # `wazuh-control status` until every reported daemon line says "is running".
+    # We start via `wazuh-control start` directly rather than `systemctl start`.
+    # The systemd unit wraps wazuh-control but can block for minutes on a slow
+    # manager handshake or stale state, which previously caused the readiness
+    # loop to time out even though the agent was fine. wazuh-control returns
+    # promptly (observed ~3s) and is the path Wazuh itself documents.
     systemctl reset-failed wazuh-agent >/dev/null 2>&1 || true
-    systemctl start --no-block wazuh-agent >/dev/null 2>&1 || true
+
+    if [ -x /var/ossec/bin/wazuh-control ]; then
+        /var/ossec/bin/wazuh-control start >/dev/null 2>&1 || true
+    else
+        # No control script: fall back to a non-blocking systemd start.
+        systemctl start --no-block wazuh-agent >/dev/null 2>&1 || true
+    fi
 
     local waited=0
     local deadline="${WAZUH_START_TIMEOUT:-60}"
     while [ "$waited" -lt "$deadline" ]; do
         if wazuh_is_up; then
             log "wazuh-agent reported running after ${waited}s."
+            # Sync systemd's view so `systemctl status` shows active too.
+            systemctl start --no-block wazuh-agent >/dev/null 2>&1 || true
             return 0
         fi
         sleep 3
         waited=$((waited+3))
     done
 
-    # If systemd start path never took, try wazuh-control directly once more.
+    # Last attempt: kick wazuh-control once more.
     if [ -x /var/ossec/bin/wazuh-control ]; then
-        /var/ossec/bin/wazuh-control start >/dev/null 2>&1 || true
+        /var/ossec/bin/wazuh-control restart >/dev/null 2>&1 || true
         sleep 5
         if wazuh_is_up; then
             log "wazuh-agent started via wazuh-control fallback."
+            systemctl start --no-block wazuh-agent >/dev/null 2>&1 || true
             return 0
         fi
     fi

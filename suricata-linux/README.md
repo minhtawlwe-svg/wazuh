@@ -124,6 +124,27 @@ chmod +x install.sh uninstall.sh
 sudo ./install.sh
 ```
 
+### Unattended (fleet rollout)
+
+Provide the interface and range as flags, and silence prompts:
+
+### One-liner
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-linux/install.sh \
+  | sudo bash
+```
+
+> Note: piping through `bash` is not a TTY, so prompts are skipped automatically. Pass `-Interface`/`-HomeNet` explicitly when using the one-liner, or clone and run interactively.
+
+### Re-binding only (Suricata already configured)
+
+```bash
+sudo ./install.sh -SkipSuricata -Interface eth0 -HomeNet "10.20.30.0/24"
+```
+```bash
+sudo ./install.sh -NonInteractive -Interface eth0 -HomeNet "10.20.30.0/24"
+```
 You'll be asked to pick the interface and enter `HOME_NET`. Example session:
 
 ```
@@ -136,29 +157,6 @@ Enter number or interface name [default: eth1]: eth0
 Set HOME_NET (the network range(s) Suricata treats as internal).
 Enter comma-separated CIDRs, e.g.  10.20.30.0/24,10.50.0.0/16
 HOME_NET: 10.20.30.0/24
-```
-
-### Unattended (fleet rollout)
-
-Provide the interface and range as flags, and silence prompts:
-
-```bash
-sudo ./install.sh -NonInteractive -Interface eth0 -HomeNet "10.20.30.0/24"
-```
-
-### One-liner
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-linux/install.sh \
-  | sudo bash -s -- -NonInteractive -Interface eth0 -HomeNet "10.20.30.0/24"
-```
-
-> Note: piping through `bash` is not a TTY, so prompts are skipped automatically. Pass `-Interface`/`-HomeNet` explicitly when using the one-liner, or clone and run interactively.
-
-### Re-binding only (Suricata already configured)
-
-```bash
-sudo ./install.sh -SkipSuricata -Interface eth0 -HomeNet "10.20.30.0/24"
 ```
 
 ---

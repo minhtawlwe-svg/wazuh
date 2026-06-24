@@ -29,6 +29,11 @@ DAILY_TASK_TIME="03:15"
 SKIP_SURICATA=0
 SKIP_WAZUH_CONFIG=0
 SKIP_SCHEDULED_TASK=0
+# Interactive prompts (interface + HOME_NET) when on a TTY. Set to 1 by
+# -NonInteractive to suppress prompts for automated/piped runs.
+NON_INTERACTIVE=0
+# Seconds to wait for wazuh-agent to report running before declaring failure.
+WAZUH_START_TIMEOUT=60
 INSTALL_LOG="/var/log/suricata-install.log"
 # FIX: SURICATA_REPO_URL is accepted but was silently unused; kept for future use
 SURICATA_REPO_URL=""
@@ -52,6 +57,34 @@ die() {
 }
 
 # -------------------------------------
+# Validate a HOME_NET specification.
+# Accepts "any" (case-insensitive) or a comma-separated list of IPv4/IPv6
+# CIDRs or bare IPs (e.g. 192.168.1.0/24,10.50.0.0/16). Returns 0 if valid.
+# -------------------------------------
+validate_homenet() {
+    local spec="$1"
+    [ -z "$spec" ] && return 1
+    if [ "$(printf '%s' "$spec" | tr 'A-Z' 'a-z')" = "any" ]; then
+        return 0
+    fi
+    local IFS=','
+    local part trimmed
+    for part in $spec; do
+        trimmed="$(printf '%s' "$part" | xargs)"
+        [ -z "$trimmed" ] && return 1
+        if printf '%s' "$trimmed" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'; then
+            continue
+        elif printf '%s' "$trimmed" | grep -q ':' && \
+             printf '%s' "$trimmed" | grep -qE '^[0-9a-fA-F:]+(/[0-9]{1,3})?$'; then
+            continue
+        else
+            return 1
+        fi
+    done
+    return 0
+}
+
+# -------------------------------------
 # Usage
 # -------------------------------------
 usage() {
@@ -72,6 +105,9 @@ Usage: sudo ./install.sh [options]
   -SkipSuricata             Skip Suricata install (use existing binary)
   -SkipWazuhConfig          Skip ossec.conf patching
   -SkipScheduledTask        Skip systemd timer registration
+  -NonInteractive           Don't prompt; use fastest NIC and leave HOME_NET
+                            unchanged unless -Interface/-HomeNet are given.
+  -WazuhStartTimeout <sec>  Seconds to wait for wazuh-agent to come up (def 60).
   -h | -Help                Show this help
 
 Examples:
@@ -96,6 +132,8 @@ while [ $# -gt 0 ]; do
         -SkipSuricata)        SKIP_SURICATA=1; shift ;;
         -SkipWazuhConfig)     SKIP_WAZUH_CONFIG=1; shift ;;
         -SkipScheduledTask)   SKIP_SCHEDULED_TASK=1; shift ;;
+        -NonInteractive)      NON_INTERACTIVE=1; shift ;;
+        -WazuhStartTimeout)   WAZUH_START_TIMEOUT="${2:-60}"; shift 2 ;;
         -h|-Help|--help)      usage; exit 0 ;;
         *)                    die "Unknown argument: $1 (use -h)" ;;
     esac
@@ -109,20 +147,9 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Validate -HomeNet early so a typo can't reach the yaml editor.
-# Accept "any" or a comma-separated list of IPv4/IPv6 CIDRs / bare IPs.
-if [ -n "$HOME_NET_OVERRIDE" ] && [ "$(printf '%s' "$HOME_NET_OVERRIDE" | tr 'A-Z' 'a-z')" != "any" ]; then
-    IFS=',' read -ra _hn_parts <<< "$HOME_NET_OVERRIDE"
-    for _p in "${_hn_parts[@]}"; do
-        _p_trim="$(printf '%s' "$_p" | xargs)"
-        # IPv4 (optional /0-32), or IPv6 (contains ':', optional /0-128)
-        if printf '%s' "$_p_trim" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$'; then
-            :
-        elif printf '%s' "$_p_trim" | grep -qE '^[0-9a-fA-F:]+(/[0-9]{1,3})?$' && printf '%s' "$_p_trim" | grep -q ':'; then
-            :
-        else
-            die "Invalid -HomeNet entry: '${_p_trim}'. Use CIDR/IP list like 10.0.0.0/8,192.168.1.0/24 or 'any'."
-        fi
-    done
+if [ -n "$HOME_NET_OVERRIDE" ]; then
+    validate_homenet "$HOME_NET_OVERRIDE" || \
+        die "Invalid -HomeNet value '${HOME_NET_OVERRIDE}'. Use CIDR/IP list like 10.0.0.0/8,192.168.1.0/24 or 'any'."
 fi
 
 : > "$INSTALL_LOG"
@@ -649,9 +676,24 @@ src, eve, dst = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(src, 'r', encoding='utf-8') as f:
     content = f.read()
 
-# Remove any existing eve.json localfile block (multiline safe)
-pat = re.compile(r'[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*', re.DOTALL)
-new = pat.sub('', content)
+# Remove ANY existing Suricata eve.json <localfile> block, regardless of OS
+# path style. This covers:
+#   - Linux paths   : /var/log/suricata/eve.json
+#   - Windows paths : C:\ProgramData\Suricata\log\eve.json  (leftover from the
+#                     PowerShell installer this script mirrors)
+#   - Any case / separator variant containing "eve.json".
+# Matching on the eve.json filename inside a <localfile> body is sufficient and
+# safe — we are about to re-add the single correct block below.
+removed = 0
+eve_pat = re.compile(
+    r'[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*',
+    re.DOTALL | re.IGNORECASE)
+new, removed = eve_pat.subn('', content)
+
+# Clean up any now-empty <ossec_config></ossec_config> shells left behind once
+# their only child (the stale localfile) was removed. Whitespace-only bodies.
+empty_shell = re.compile(r'[ \t]*<ossec_config>\s*</ossec_config>\s*', re.DOTALL)
+new = empty_shell.sub('', new)
 
 block = ('  <localfile>\n'
          '    <log_format>json</log_format>\n'
@@ -667,6 +709,8 @@ else:
 
 with open(dst, 'w', encoding='utf-8') as f:
     f.write(new)
+
+sys.stderr.write("STRIPPED_EVE_BLOCKS=%d\n" % removed)
 PY
 
     # Validate BEFORE overwriting the live config, so a malformed patch can
@@ -718,25 +762,114 @@ PY
     # somehow prevents startup, restore the backup automatically so we never
     # leave the agent dead — this is the safety net the first failure lacked.
     if systemctl list-unit-files wazuh-agent.service >/dev/null 2>&1; then
-        if systemctl restart wazuh-agent 2>/tmp/wazuh-restart.log; then
-            sleep 2
-            if systemctl is-active --quiet wazuh-agent; then
-                log "wazuh-agent restarted and active."
-            else
-                log "wazuh-agent not active after restart — rolling back ossec.conf."
-                cp -a "${WAZUH_CONF}.${ts}.bak" "$WAZUH_CONF"
-                systemctl restart wazuh-agent >/dev/null 2>&1 || true
-                die "wazuh-agent failed to start with patched config; restored backup ${WAZUH_CONF}.${ts}.bak. Inspect /var/ossec/logs/ossec.log"
-            fi
+        if wazuh_clean_restart 2>/tmp/wazuh-restart.log; then
+            log "wazuh-agent restarted and active."
         else
-            log "systemctl restart wazuh-agent failed — rolling back ossec.conf."
+            log "wazuh-agent failed to start with patched config — rolling back ossec.conf."
             cp -a "${WAZUH_CONF}.${ts}.bak" "$WAZUH_CONF"
-            systemctl restart wazuh-agent >/dev/null 2>&1 || true
-            die "wazuh-agent restart command failed; restored backup ${WAZUH_CONF}.${ts}.bak (see /tmp/wazuh-restart.log)"
+            wazuh_clean_restart >/dev/null 2>&1 || true
+            die "wazuh-agent failed to start; restored backup ${WAZUH_CONF}.${ts}.bak. See /tmp/wazuh-restart.log and /var/ossec/logs/ossec.log"
         fi
     else
         log "wazuh-agent.service not found — user must restart agent manually."
     fi
+}
+
+# -------------------------------------
+# Clean Wazuh restart.
+#
+# The wazuh-agent unit can fail to restart when a previous run left an orphaned
+# wazuh-execd / wazuh-control / wazuh-agentd process behind (systemd reports
+# "Unit process NNN remains running after unit stopped"). A plain
+# `systemctl restart` then races the orphan and exits non-zero.
+#
+# This helper: stops via wazuh-control, reaps any lingering wazuh-* daemons,
+# then starts via systemd and verifies the unit is active. Returns 0 only if
+# the agent is genuinely running afterwards.
+# -------------------------------------
+wazuh_clean_restart() {
+    # 1. Graceful stop through Wazuh's own control script (best-effort).
+    if [ -x /var/ossec/bin/wazuh-control ]; then
+        /var/ossec/bin/wazuh-control stop >/dev/null 2>&1 || true
+    fi
+    systemctl stop wazuh-agent >/dev/null 2>&1 || true
+    sleep 2
+
+    # 2. Reap orphaned daemons that block a clean start.
+    local leftover
+    leftover=$(pgrep -f '/var/ossec/bin/wazuh-' || true)
+    if [ -n "$leftover" ]; then
+        log "Reaping lingering wazuh processes: $(echo "$leftover" | tr '\n' ' ')"
+        pkill -TERM -f '/var/ossec/bin/wazuh-' >/dev/null 2>&1 || true
+        sleep 2
+        # Force-kill anything still standing.
+        pkill -KILL -f '/var/ossec/bin/wazuh-' >/dev/null 2>&1 || true
+        sleep 1
+    fi
+
+    # 3. Start cleanly, then POLL for readiness.
+    #
+    # The wazuh-agent unit can exceed systemd's start timeout even on a healthy
+    # start — the daemons initialise over ~20-30s, and systemd may report
+    # "failed (timeout)" while the agent is in fact coming up fine. So we do NOT
+    # trust the exit code of `systemctl start`; we launch non-blocking and poll
+    # `wazuh-control status` until every reported daemon line says "is running".
+    systemctl reset-failed wazuh-agent >/dev/null 2>&1 || true
+    systemctl start --no-block wazuh-agent >/dev/null 2>&1 || true
+
+    local waited=0
+    local deadline="${WAZUH_START_TIMEOUT:-60}"
+    while [ "$waited" -lt "$deadline" ]; do
+        if wazuh_is_up; then
+            log "wazuh-agent reported running after ${waited}s."
+            return 0
+        fi
+        sleep 3
+        waited=$((waited+3))
+    done
+
+    # If systemd start path never took, try wazuh-control directly once more.
+    if [ -x /var/ossec/bin/wazuh-control ]; then
+        /var/ossec/bin/wazuh-control start >/dev/null 2>&1 || true
+        sleep 5
+        if wazuh_is_up; then
+            log "wazuh-agent started via wazuh-control fallback."
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# -------------------------------------
+# Returns 0 iff every daemon line from `wazuh-control status` reports running.
+#
+# Robust against the cosmetic logcollector ERROR (1103) for a missing/stale
+# eve.json path: that error does NOT stop the daemon, and `wazuh-control status`
+# still lists it as "is running". We count daemon lines and require that NONE
+# of them say "not running" while AT LEAST the core agentd daemon is up.
+# -------------------------------------
+wazuh_is_up() {
+    [ -x /var/ossec/bin/wazuh-control ] || {
+        systemctl is-active --quiet wazuh-agent
+        return $?
+    }
+    local status_out
+    status_out=$(/var/ossec/bin/wazuh-control status 2>/dev/null) || return 1
+
+    # No daemon lines at all => not up.
+    local total running notrunning
+    total=$(printf '%s\n' "$status_out" | grep -cE 'wazuh-|ossec-' || true)
+    [ "$total" -eq 0 ] && return 1
+
+    notrunning=$(printf '%s\n' "$status_out" | grep -cE 'not running' || true)
+    running=$(printf '%s\n' "$status_out" | grep -cE 'is running' || true)
+
+    # Up only if at least one daemon is running and none report "not running".
+    if [ "$running" -ge 1 ] && [ "$notrunning" -eq 0 ]; then
+        return 0
+    fi
+    return 1
 }
 
 # -------------------------------------
@@ -921,6 +1054,116 @@ EOF
 }
 
 # -------------------------------------
+# Interactive capture-interface selection.
+#
+# Scans real interfaces (via detect_interfaces, which already filters out
+# virtual/loopback/tunnel devices and sorts by link speed), prints a numbered
+# menu WITH each NIC's IP/state/speed so the operator can recognise the right
+# one, and reads the choice. Honoured only on a TTY; non-interactive runs or
+# -NonInteractive fall back to the fastest detected NIC.
+# -------------------------------------
+prompt_for_interface() {
+    local cands=()
+    while IFS= read -r line; do
+        [ -n "$line" ] && cands+=("$line")
+    done < <(detect_interfaces)
+
+    if [ ${#cands[@]} -eq 0 ]; then
+        die "No capture interface found. Pass -Interface <name>."
+    fi
+
+    # Non-interactive or no TTY: take the fastest (first) candidate.
+    if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+        SELECTED_IFACE="${cands[0]}"
+        log "Capture interface (auto, non-interactive): ${SELECTED_IFACE}"
+        return 0
+    fi
+
+    # Interactive menu — printed to stderr so it never pollutes logs/pipes.
+    {
+        echo ""
+        echo "Select the capture interface for Suricata:"
+        printf "  %-4s %-12s %-22s %-8s %s\n" "No." "IFACE" "IPv4" "STATE" "SPEED"
+        local idx=1
+        for ifc in "${cands[@]}"; do
+            local ip state speed
+            ip=$(ip -4 -o addr show dev "$ifc" 2>/dev/null | awk '{print $4}' | paste -sd, - )
+            [ -z "$ip" ] && ip="(none)"
+            state=$(cat "/sys/class/net/$ifc/operstate" 2>/dev/null || echo "?")
+            speed=$(cat "/sys/class/net/$ifc/speed" 2>/dev/null || echo "?")
+            [[ "$speed" =~ ^[0-9]+$ ]] && speed="${speed}Mb/s" || speed="n/a"
+            printf "  %-4s %-12s %-22s %-8s %s\n" "$idx)" "$ifc" "$ip" "$state" "$speed"
+            idx=$((idx+1))
+        done
+        echo ""
+    } >&2
+
+    local choice ifc_selected=""
+    while true; do
+        printf "Enter number or interface name [default: %s]: " "${cands[0]}" >&2
+        read -r choice || { choice=""; }
+        if [ -z "$choice" ]; then
+            ifc_selected="${cands[0]}"
+            break
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]]; then
+            if [ "$choice" -ge 1 ] && [ "$choice" -le "${#cands[@]}" ]; then
+                ifc_selected="${cands[$((choice-1))]}"
+                break
+            fi
+            echo "  Out of range. Pick 1-${#cands[@]}." >&2
+            continue
+        fi
+        if [ -d "/sys/class/net/$choice" ]; then
+            ifc_selected="$choice"
+            break
+        fi
+        echo "  '$choice' is not a valid interface. Try again." >&2
+    done
+
+    SELECTED_IFACE="$ifc_selected"
+    log "Capture interface (interactive selection): ${SELECTED_IFACE}"
+}
+
+# -------------------------------------
+# Interactive HOME_NET entry.
+#
+# Prompts for one or more CIDR ranges (production nets are rarely the RFC1918
+# defaults). Validates each entry with the same rules as the -HomeNet flag.
+# Skipped if -HomeNet was already supplied, on -NonInteractive, or with no TTY
+# (in which case the existing HOME_NET in suricata.yaml is left untouched).
+# -------------------------------------
+prompt_for_homenet() {
+    [ -n "$HOME_NET_OVERRIDE" ] && return 0
+    if [ "$NON_INTERACTIVE" -eq 1 ] || [ ! -t 0 ]; then
+        return 0
+    fi
+
+    {
+        echo ""
+        echo "Set HOME_NET (the network range(s) Suricata treats as internal)."
+        echo "Enter comma-separated CIDRs, e.g.  192.168.1.0/24,10.50.0.0/16"
+        echo "Press ENTER to leave the current suricata.yaml HOME_NET unchanged."
+    } >&2
+
+    local input
+    while true; do
+        printf "HOME_NET: " >&2
+        read -r input || { input=""; }
+        if [ -z "$input" ]; then
+            log "HOME_NET left unchanged (no input)."
+            return 0
+        fi
+        if validate_homenet "$input"; then
+            HOME_NET_OVERRIDE="$input"
+            log "HOME_NET entered interactively: ${HOME_NET_OVERRIDE}"
+            return 0
+        fi
+        echo "  Invalid format. Use CIDR/IP list like 192.168.1.0/24,10.50.0.0/16 or 'any'." >&2
+    done
+}
+
+# -------------------------------------
 # Main
 # -------------------------------------
 main() {
@@ -937,29 +1180,23 @@ main() {
     install_suricata
 
     log "Detecting capture interfaces..."
-    local ifaces=()
-    while IFS= read -r line; do
-        [ -n "$line" ] && ifaces+=("$line")
-    done < <(detect_interfaces)
 
-    if [ ${#ifaces[@]} -eq 0 ]; then
-        die "No capture interface found. Pass -Interface <name>."
-    fi
-
-    # Single-interface model: if the operator passed -Interface, detect_interfaces
-    # already validated and echoed exactly that one. Otherwise pick the fastest
-    # detected interface (first in the speed-sorted list) and bind only that one.
+    # Resolve the single capture interface:
+    #   -Interface given      -> validate & use it (no prompt)
+    #   interactive TTY       -> scan + numbered menu, operator types choice
+    #   non-interactive       -> fastest detected NIC
     if [ -n "$INTERFACE_OVERRIDE" ]; then
-        SELECTED_IFACE="$INTERFACE_OVERRIDE"
-        log "Capture interface (manual): ${SELECTED_IFACE}"
-    else
-        SELECTED_IFACE="${ifaces[0]}"
-        if [ ${#ifaces[@]} -gt 1 ]; then
-            log "Multiple interfaces detected (${ifaces[*]}); selecting fastest: ${SELECTED_IFACE}. Use -Interface <name> to choose another."
-        else
-            log "Capture interface (auto): ${SELECTED_IFACE}"
+        if [ ! -d "/sys/class/net/$INTERFACE_OVERRIDE" ]; then
+            die "Override interface not found: $INTERFACE_OVERRIDE"
         fi
+        SELECTED_IFACE="$INTERFACE_OVERRIDE"
+        log "Capture interface (from -Interface): ${SELECTED_IFACE}"
+    else
+        prompt_for_interface
     fi
+
+    # Resolve HOME_NET (prompt only if -HomeNet not supplied and interactive).
+    prompt_for_homenet
 
     patch_yaml "$SURICATA_YAML"
     install_etopen_rules

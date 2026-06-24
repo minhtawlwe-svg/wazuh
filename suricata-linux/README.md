@@ -1,4 +1,10 @@
 # suricata-linux
+🔥 1. One-Line Installation (Recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-linux/install.sh \
+  | sudo bash
+```
 
 Auto-install **Suricata 8.0.x** on Linux (Debian/Ubuntu + RHEL/Fedora/Rocky), bind it to an **existing, running Wazuh agent**, load ET Open rules, refresh them daily, and rotate `eve.json` at 2 GB. Parallels [`suricata-win/`](../suricata-win/).
 
@@ -112,13 +118,6 @@ Runs as **root** with `set -euo pipefail`. Logs every action to `/var/log/surica
 | `-SuricataRepoUrl <url>` | (reserved) | Currently unused. |
 
 ---
-
-### One-liner
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-linux/install.sh \
-  | sudo bash
-```
 
 > Note: piping through `bash` is not a TTY, so prompts are skipped automatically. Pass `-Interface`/`-HomeNet` explicitly when using the one-liner, or clone and run interactively.
 

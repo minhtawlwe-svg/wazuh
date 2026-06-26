@@ -21,6 +21,40 @@
 
 ---
 
+## Quick Install (one-liner) — Agent side
+
+On the Wazuh **agent**, open **PowerShell as Administrator** and run:
+
+```powershell
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 | iex
+```
+
+This downloads and places both scripts in the correct folders:
+
+| File | Destination |
+|------|-------------|
+| `reenable-defender.cmd` | `C:\Program Files (x86)\ossec-agent\active-response\bin\` |
+| `reenable-defender.ps1` | `C:\Program Files\Sysinternals\` |
+
+After it finishes, do the **manager-side** config in **Section 3**, then restart the agent (`Restart-Service WazuhSvc`).
+
+> Manual file placement (without the installer) is documented in **Section 2**.
+
+### Optional — INSTANT local enforcement (no manager round-trip)
+
+The manager AR reacts in a few seconds. For **immediate** re-enable the moment Defender is
+turned off, also register the local event-triggered watcher (fires on Defender Event ID
+5001/5010/5012). Run in an **elevated** PowerShell on the agent:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-watcher.ps1
+```
+
+This creates a Scheduled Task `Defender-Guard-Instant-ReEnable` (runs as SYSTEM) that
+re-runs `reenable-defender.ps1` instantly — independent of the Wazuh manager.
+
+---
+
 ## 2. Files and Locations
 
 | File | Role | Destination (on agent) |

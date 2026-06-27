@@ -27,18 +27,28 @@ try {
 }
 
 if ($action -eq "add") {
-    # Flip real-time protection back ON
+    # 1. Start Service
+    Start-Service -Name WinDefend -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+
+    # 2. Re-enable settings
     Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
     Set-MpPreference -DisableBehaviorMonitoring $false -ErrorAction SilentlyContinue
     Set-MpPreference -DisableIOAVProtection   $false -ErrorAction SilentlyContinue
     Set-MpPreference -DisableScriptScanning    $false -ErrorAction SilentlyContinue
 
-    # Make sure the service is running
-    Start-Service -Name WinDefend -ErrorAction SilentlyContinue
+    # 3. Verification Loop
+    for ($i=0; $i -lt 3; $i++) {
+        Start-Sleep -Seconds 3
+        $rtp = (Get-MpComputerStatus).RealTimeProtectionEnabled
+        if ($rtp) { break }
 
-    Start-Sleep -Seconds 2
+        Write-Log "Attempt $($i+1): Protection still disabled, restarting WinDefend..."
+        Restart-Service -Name WinDefend -Force -ErrorAction SilentlyContinue
+    }
+
     $rtp = (Get-MpComputerStatus).RealTimeProtectionEnabled
-    Write-Log "Re-enable attempted. RealTimeProtectionEnabled=$rtp"
+    Write-Log "Verification Ended. RealTimeProtectionEnabled=$rtp"
 } else {
     Write-Log "Timeout/delete action received, no-op."
 }

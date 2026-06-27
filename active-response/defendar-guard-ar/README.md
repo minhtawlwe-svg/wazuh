@@ -2,7 +2,42 @@
 
 **Purpose:** When Windows Defender real-time protection is turned OFF on an agent, Wazuh rule **100620** fires and an Active Response (AR) automatically turns it back ON, then logs the event.
 
-**Author:** AGB · **Date:** 2026-06-26
+**Author:** [redacted] · **Date:** 2026-06-26
+
+---
+
+## Quick Reference (TL;DR)
+
+**On agent (elevated PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 | iex
+```
+
+**On manager:**
+```xml
+<!-- inside <ossec_config> -->
+<command>
+  <name>reenable-defender</name>
+  <executable>reenable-defender.cmd</executable>
+  <timeout_allowed>no</timeout_allowed>
+</command>
+
+<active-response>
+  <command>reenable-defender</command>
+  <location>local</location>
+  <rules_id>100620</rules_id>
+</active-response>
+```
+
+**Validate + restart:**
+```bash
+sudo /var/ossec/bin/wazuh-analysisd -t
+sudo systemctl restart wazuh-manager
+```
+
+```powershell
+Restart-Service WazuhSvc   # on agent
+```
 
 ---
 
@@ -11,8 +46,8 @@
 | Item | Value |
 |------|-------|
 | Trigger rule | `100620` — *Defender real-time protection DISABLED* |
-| Agent under control | **MinH** (host `DESKTOP-MG5CSSO`) |
-| Manager | intern-vm `<MANAGER_IP>` (native systemd Wazuh) |
+| Agent under control | `[agent-hostname]` |
+| Manager | `[wazuh-manager-hostname-or-ip]` |
 | AR action | Re-enable real-time / behavior / IOAV / script scanning + start `WinDefend` |
 | AR location | `local` (runs on the agent that raised the alert) |
 
@@ -75,16 +110,16 @@ PowerShell.exe -ExecutionPolicy Bypass -NoProfile -File "C:\Program Files\Sysint
 - Writes its own `Starting` / `Ended` lines to `active-responses.log` via a shared `FileStream` (custom AR isn't auto-logged; the log may be tailed by logcollector).
 - ASCII-only script (PS 5.1 mangles UTF-8-no-BOM).
 
-> Both files are already deployed and verified on **MinH**.
+> Both files are already deployed and verified on the reference agent.
 
 ---
 
-## 3. Manager-Side Configuration (intern-vm)
+## 3. Manager-Side Configuration
 
-> intern-vm is a **shared box** — always back up and check for an existing entry first.
+> Manager host is shared — always back up and check for an existing entry first.
 
 ```bash
-ssh cyberintern@<MANAGER_IP>
+ssh <wazuh-manager-user>@<wazuh-manager-ip>
 
 # back up
 sudo cp /var/ossec/etc/ossec.conf /var/ossec/etc/ossec.conf.bak.$(date +%F_%H%M)
@@ -122,7 +157,7 @@ sudo systemctl restart wazuh-manager
 sudo systemctl status wazuh-manager --no-pager
 ```
 
-On the agent (**MinH**), restart so it pulls the new AR config:
+On the agent, restart so it pulls the new AR config:
 ```powershell
 Restart-Service WazuhSvc
 ```
@@ -142,7 +177,7 @@ Get-Content "C:\Program Files (x86)\ossec-agent\active-response\active-responses
 **PASS criteria:** the log now shows
 ```
 reenable-defender: Starting. stdin=...
-reenable-defender: Re-enable attempted. RealTimeProtectionEnabled=True
+reenable-defender: Verification Ended. RealTimeProtectionEnabled=True
 reenable-defender: Ended.
 ```
 

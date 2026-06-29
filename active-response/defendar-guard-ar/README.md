@@ -69,6 +69,11 @@ irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/d
 > the parser throws `The string is missing the terminator: '@`. Saving to disk and
 > executing the file keeps proper line endings, which is required for the helpers
 > to parse. The installer auto-detects this and self-bootstraps if invoked via `iex`.
+>
+> **The installer also normalizes every downloaded `.ps1` / `.cmd` to CRLF line endings.**
+> GitHub raw serves LF; PowerShell 5.1 here-string parsing is brittle on LF-only files.
+> The fix is automatic — re-run `install.ps1` and every shipped script will be re-saved
+> with CRLF terminators before the watchdog / enforcer scripts try to run.
 
 This single command does everything end-to-end:
 

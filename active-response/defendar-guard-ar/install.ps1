@@ -99,6 +99,10 @@ foreach ($f in $files) {
         Write-Host "  -> $($f.u)" -ForegroundColor Yellow
         try {
             Invoke-WebRequest "$base/$($f.u)" -OutFile $dest -UseBasicParsing
+            # GitHub raw serves LF; PS 5.1 here-strings want CRLF. Force on every download.
+            if ($f.u -like '*.ps1' -or $f.u -like '*.cmd') {
+                Guard-NormalizeLineEndings -Path $dest
+            }
         } catch {
             Write-Host "  [!!] $($f.u): $($_.Exception.Message)" -ForegroundColor Red
         }
@@ -108,6 +112,12 @@ foreach ($f in $files) {
 }
 
 # 5. verify all files present, abort if not.
+# Normalize any pre-existing scripts to CRLF as well (idempotent safety net).
+foreach ($p in "$psDir\reenable-defender.ps1", "$psDir\watchdog-service.ps1", "$psDir\enforce-tamper-protection.ps1") {
+    if (Test-Path $p) { Guard-NormalizeLineEndings -Path $p }
+}
+
+
 $required = @(
     "$binDir\reenable-defender.cmd",
     "$psDir\reenable-defender.ps1",

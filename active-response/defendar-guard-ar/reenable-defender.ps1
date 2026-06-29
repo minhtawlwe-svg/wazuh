@@ -103,7 +103,7 @@ while ((Get-Date) -lt $deadline) {
     # On the second or later failure, restart the service once -- that's
     # the last lever that re-applies preferences on a stuck state.
     if ($attempt -eq 2) {
-        Write-Log "Attempt $attempt: still off, restarting WinDefend."
+        Write-Log "Attempt ${attempt}: still off, restarting WinDefend."
         try { Restart-Service -Name WinDefend -Force -ErrorAction Stop } catch { }
         Start-Sleep -Milliseconds 500
         # Re-issue preferences (the restart clears state).
@@ -115,5 +115,5 @@ while ((Get-Date) -lt $deadline) {
 }
 
 $rtp = Test-Rtp
-Write-Log "Verification Ended. RealTimeProtectionEnabled=$rtp (attempts=$attempt)"
+Write-Log "Verification Ended. RealTimeProtectionEnabled=$rtp (attempts=${attempt})"
 Write-Log "Ended."

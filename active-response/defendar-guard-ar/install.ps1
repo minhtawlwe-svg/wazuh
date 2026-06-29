@@ -256,11 +256,52 @@ Write-Host ("  Policy XML         : {0}\tamper-protection-policy.xml"     -f $ps
 Write-Host "  Scheduled Tasks    :"
 foreach ($t in $registered) { Write-Host ("    - {0}" -f $t) -ForegroundColor Green }
 
+# ----------------------------------------------------------------------
+# Post-install: first-action self-test
+# ----------------------------------------------------------------------
 Write-Host ""
-Write-Host "Test it works:" -ForegroundColor Cyan
-Write-Host "  Set-MpPreference -DisableRealtimeMonitoring `$true    # re-enables within ~1s"
-Write-Host "  Stop-Service WinDefend                                # auto-starts within ~1s"
-Write-Host "  (Get-MpComputerStatus).RealTimeProtectionEnabled      # expect: True"
+Write-Host "Doing a first-action self-test..." -ForegroundColor Yellow
+try {
+    $beforeRtp = (Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled
+    Write-Host ("  Before: RealTimeProtectionEnabled = {0}" -f $beforeRtp)
+
+    # Flip RTP OFF -- triggers Event 5001 + our Event-Watch task + Service-Watch poll
+    Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+
+    $afterRtp = (Get-MpComputerStatus -ErrorAction Stop).RealTimeProtectionEnabled
+    Write-Host ("  After disable+3s: RealTimeProtectionEnabled = {0}" -f $afterRtp)
+
+    if ($afterRtp) {
+        Write-Host "  [OK] First-action defense re-enabled RTP within 3s. Watchers are LIVE." -ForegroundColor Green
+    } elseif ($registered -contains "Defender-Guard-Service-Watch") {
+        Write-Host "  [i] RTP did not flip back in 3s. Watcher is registered but may be slow." -ForegroundColor DarkYellow
+    } else {
+        Write-Host "  [!!] Watcher tasks failed to register. Falling back to live process..." -ForegroundColor Red
+        # Live fallback: spawn the watchdog NOW as a SYSTEM-process background job.
+        # Not persistent across reboot, but covers THIS session.
+        if (-not $psSvc) { $psSvc = Get-Script -Name "watchdog-service.ps1" -Dir $psDir }
+        if ($psSvc) {
+            $proc = Start-Process -FilePath "powershell.exe" `
+                                  -ArgumentList @("-ExecutionPolicy","Bypass","-NoProfile","-File","`"$psSvc`"") `
+                                  -WindowStyle Hidden -PassThru -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Host ("  [+] watchdog-service.ps1 launched live as PID {0} (live only, not persistent)." -f $proc.Id) -ForegroundColor Yellow
+            }
+        }
+    }
+
+    # Restore
+    Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue
+} catch {
+    Write-Host ("  [i] Self-test skipped: {0}" -f $_.Exception.Message) -ForegroundColor DarkYellow
+}
+
+Write-Host ""
+Write-Host "Manual verification:" -ForegroundColor Cyan
+Write-Host "  Get-ScheduledTask | Where-Object { `$_.TaskName -like 'Defender-Guard-*' }"
+Write-Host "  Set-MpPreference -DisableRealtimeMonitoring `$true"
+Write-Host "  Start-Sleep 2; (Get-MpComputerStatus).RealTimeProtectionEnabled   # expect: True"
 
 if (Test-Path "$binDir\reenable-defender.cmd") {
     Write-Host ""

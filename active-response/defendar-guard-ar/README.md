@@ -8,9 +8,12 @@
 
 ## Quick Reference (TL;DR)
 
-**On agent (elevated PowerShell):**
+**On agent (elevated PowerShell, run each line):**
 ```powershell
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1; & "$env:TEMP\install.ps1"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1
+Unblock-File $env:TEMP\install.ps1
+& "$env:TEMP\install.ps1"
 ```
 
 **On manager:**
@@ -56,21 +59,31 @@ Restart-Service WazuhSvc   # on agent
 
 ---
 
-## Quick Install (one-liner) — Agent side
+## Quick Install — Agent side
 
-On the Wazuh **agent**, open **PowerShell as Administrator** and run:
+On the Wazuh **agent**, open **PowerShell as Administrator** and run each line:
 
 ```powershell
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1; & "$env:TEMP\install.ps1"
+# 1. Force TLS 1.2 -- PowerShell 5.1 defaults to TLS 1.0/1.1 which GitHub decommisioned.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# 2. Save to disk and unblock -- downloaded files carry Mark-of-the-Web which trips AMSI
+#    ("malicious content and has been blocked by your antivirus"). Unblock-File clears MOTW.
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1
+Unblock-File $env:TEMP\install.ps1
+
+# 3. Run
+& "$env:TEMP\install.ps1"
 ```
 
-> **Why `-OutFile + &` instead of `| iex`?** Streaming into `iex` flattens the script
-> body onto a single parse line; here-strings (`@"..."@`) lose their terminators and
-> the parser throws `The string is missing the terminator: '@`. Saving to disk and
-> executing the file keeps proper line endings, which is required for the helpers
-> to parse. The installer auto-detects this and self-bootstraps if invoked via `iex`.
->
-> **The installer also normalizes every downloaded `.ps1` / `.cmd` to CRLF line endings.**
+> **All three lines matter.**
+> - Without line 1: `Invoke-RestMethod: Unable to read data from the transport connection`.
+> - Without line 2: `This script contains malicious content and has been blocked by your antivirus software.`
+> - Do NOT pipe into `iex` instead — streaming flattens the body and breaks the parser
+>   (`The string is missing the terminator: '@`). The installer auto-bootstraps if you do,
+>   but the explicit `-OutFile + Unblock-File + &` form is the canonical safe invocation.
+
+> **The installer normalizes every downloaded `.ps1` / `.cmd` to CRLF line endings.**
 > GitHub raw serves LF; PowerShell 5.1 here-string parsing is brittle on LF-only files.
 > The fix is automatic — re-run `install.ps1` and every shipped script will be re-saved
 > with CRLF terminators before the watchdog / enforcer scripts try to run.
@@ -124,7 +137,9 @@ prints the current state; if Tamper is OFF, enable it via ONE of:
 
 To re-register the tasks later (e.g., after a schema bump) without re-downloading:
 ```powershell
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install-watcher.ps1 -OutFile $env:TEMP\iw.ps1; & "$env:TEMP\iw.ps1"
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install-watcher.ps1 -OutFile $env:TEMP\iw.ps1
+Unblock-File $env:TEMP\iw.ps1
+& "$env:TEMP\iw.ps1"
 ```
 
 > **Performance:** `watchdog-service.ps1` polls via SCM (user-mode, no kernel impact). Same
@@ -149,8 +164,8 @@ Unregister-ScheduledTask 'Defender-Guard-Event-Watch','Defender-Guard-Service-Wa
 | `reenable-defender.cmd` | Wrapper Wazuh calls | `C:\Program Files (x86)\ossec-agent\active-response\bin\` |
 | `reenable-defender.ps1` | Does the actual work (AR + standalone) | `C:\Program Files\Sysinternals\` |
 | `watchdog-service.ps1` | 1s poll watchdog (service liveness + preference re-enforce) | `C:\Program Files\Sysinternals\` |
-| `_install-helpers.ps1` | Shared installer helpers (register tasks, audit) — dot-sourced | `C:\Program Files\Sysinternals\` |
-| `install-watcher.ps1` | Thin wrapper: re-register the two Scheduled Tasks | run on agent only |
+| `install-watcher.ps1` | Re-register only the two Scheduled Tasks (after install.ps1 once) | run on agent only |
+| `install.ps1` | One-step installer (self-contained, no helper file) | run once per agent |
 | `enforce-tamper-protection.ps1` | Audit + re-enforce; surfaces Tamper OFF status | `C:\Program Files\Sysinternals\` |
 | `tamper-protection-policy.xml` | Intune OMA-URI + GPO ADMX snippets for Tamper Protection | manager / Intune side |
 
@@ -293,7 +308,6 @@ Remove-Item "C:\Program Files (x86)\ossec-agent\active-response\bin\reenable-def
 Remove-Item "C:\Program Files\Sysinternals\reenable-defender.ps1"
 Remove-Item "C:\Program Files\Sysinternals\watchdog-service.ps1"
 Remove-Item "C:\Program Files\Sysinternals\install-watcher.ps1"
-Remove-Item "C:\Program Files\Sysinternals\_install-helpers.ps1"
 Remove-Item "C:\Program Files\Sysinternals\enforce-tamper-protection.ps1"
 Remove-Item "C:\Program Files\Sysinternals\tamper-protection-policy.xml"
 Restart-Service WazuhSvc

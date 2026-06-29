@@ -11,6 +11,8 @@
 **On agent (elevated PowerShell):**
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Force a clean copy every run so a previous partial install doesn't get re-executed.
+if (Test-Path $env:TEMP\install.ps1) { Remove-Item $env:TEMP\install.ps1 -Force }
 irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1
 Unblock-File $env:TEMP\install.ps1
 & "$env:TEMP\install.ps1"

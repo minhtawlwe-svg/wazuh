@@ -41,13 +41,28 @@ function Guard-NormalizeLineEndings {
 # Downloads a script into $psDir (or $binDir for .cmd files) if missing.
 # ----------------------------------------------------------------------
 function Get-Script {
-    param([string]$Name, [string]$Dir)
+    [CmdletBinding()]
+    param(
+        [string]$Name,
+        [string]$Dir,
+        [switch]$Optional   # missing-on-remote is OK; just warn and return $null
+    )
     $dest = Join-Path $Dir $Name
     if (Test-Path $dest) { return $dest }
     if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
     Write-Host "  -> $Name" -ForegroundColor Yellow
-    try { Invoke-WebRequest "$base/$Name" -OutFile $dest -UseBasicParsing }
-    catch { throw "Download failed for $Name : $($_.Exception.Message)" }
+    try {
+        Invoke-WebRequest "$base/$Name" -OutFile $dest -UseBasicParsing -ErrorAction Stop
+    } catch {
+        $code = $null
+        if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+        if ($Optional -and $code -eq 404) {
+            if (Test-Path $dest) { Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue }
+            Write-Host "  [i] $Name not available on the repo (404). Skipping." -ForegroundColor DarkYellow
+            return $null
+        }
+        throw "Download failed for $Name : $($_.Exception.Message)"
+    }
     Guard-NormalizeLineEndings -Path $dest
     return $dest
 }
@@ -137,7 +152,7 @@ if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Path $psDir -Force 
 # scripts whose publisher is in LocalMachine\TrustedPeople. Doing this
 # before any other file write means even the file copies below won't
 # trip AMSI heuristics.
-$cerPath = Get-Script -Name "defender-guard.cer" -Dir $psDir
+$cerPath = Get-Script -Name "defender-guard.cer" -Dir $psDir -Optional
 if (Test-Path $cerPath) {
     try {
         $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cerPath)

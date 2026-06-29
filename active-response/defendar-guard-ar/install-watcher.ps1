@@ -134,13 +134,20 @@ if (-not ((Test-Path $psEvent) -and (Test-Path $psSvc))) {
 Write-Host "Registering Defender-Guard watchers..." -ForegroundColor Yellow
 $eventTrigger = [string]::Join([Environment]::NewLine, @(
     '<EventTrigger>'
-    '  <Subscription>Microsoft-Windows-Windows Defender/Operational</Subscription>'
+    '  <Subscription>'
+    '*[System[Provider[@Name=''Microsoft-Windows-Windows Defender''] and (EventID=5001 or EventID=5010 or EventID=5012)]]'
+    '</Subscription>'
     '  <Delay>PT0S</Delay>'
     '  <Enabled>true</Enabled>'
+    '  <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>'
     '</EventTrigger>'
 ))
 $bootTrigger = '<BootTrigger><Enabled>true</Enabled></BootTrigger>'
-Register-GuardTask -Name "Defender-Guard-Event-Watch"   -Script $psEvent -TriggerXml $eventTrigger
+$r1 = Register-GuardTask -Name "Defender-Guard-Event-Watch"   -Script $psEvent -TriggerXml $eventTrigger
+if (-not $r1) {
+    Write-Host "  [i] Event-Trigger registration failed. Service watchdog is the authoritative failsafe." -ForegroundColor DarkYellow
+    Unregister-ScheduledTask -TaskName "Defender-Guard-Event-Watch" -Confirm:$false -ErrorAction SilentlyContinue
+}
 Register-GuardTask -Name "Defender-Guard-Service-Watch" -Script $psSvc   -TriggerXml $bootTrigger
 
 Write-Host ""

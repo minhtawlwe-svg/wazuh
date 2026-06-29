@@ -209,16 +209,33 @@ $psEvent = Join-Path $psDir "reenable-defender.ps1"
 $psSvc   = Join-Path $psDir "watchdog-service.ps1"
 
 if ((Test-Path $psEvent) -and (Test-Path $psSvc)) {
+    # EventTrigger schema: <Subscription> child is a legacy xpath-style query
+    # against the event log channel. It must include a provider filter for
+    # the modern Defender operational log ("*Microsoft-Windows-Windows
+    # Defender!*") and the EventIDs that indicate a state flip (5001 = real-
+    # time disabled, 5010 = service state change, 5012 = tamper-attempt).
     $eventTrigger = [string]::Join([Environment]::NewLine, @(
         '<EventTrigger>'
-        '  <Subscription>Microsoft-Windows-Windows Defender/Operational</Subscription>'
+        '  <Subscription>'
+        '*[System[Provider[@Name=''Microsoft-Windows-Windows Defender''] and (EventID=5001 or EventID=5010 or EventID=5012)]]'
+        '</Subscription>'
         '  <Delay>PT0S</Delay>'
         '  <Enabled>true</Enabled>'
+        '  <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>'
         '</EventTrigger>'
     ))
+
     $bootTrigger = '<BootTrigger><Enabled>true</Enabled></BootTrigger>'
 
     $r1 = Register-GuardTask -Name "Defender-Guard-Event-Watch"   -Script $psEvent -TriggerXml $eventTrigger
+    if (-not $r1) {
+        # Service watchdog is the authoritative failsafe (1s poll). The event
+        # trigger is purely an extra latency-reduction layer; if the channel
+        # is hidden by GPO/Tamper, just skip it.
+        Write-Host "  [i] Event-Trigger registration failed (channel policy or schema). Service watchdog still active." -ForegroundColor DarkYellow
+        Unregister-ScheduledTask -TaskName "Defender-Guard-Event-Watch" -Confirm:$false -ErrorAction SilentlyContinue
+    }
+
     $r2 = Register-GuardTask -Name "Defender-Guard-Service-Watch" -Script $psSvc   -TriggerXml $bootTrigger
     if ($r1) { $registered += $r1 }
     if ($r2) { $registered += $r2 }

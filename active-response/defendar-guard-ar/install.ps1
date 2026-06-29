@@ -133,6 +133,31 @@ if (-not (Test-Path $binDir)) {
 
 if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Path $psDir -Force | Out-Null }
 
+# Trust the publisher cert FIRST. Defender AMSI does not block signed
+# scripts whose publisher is in LocalMachine\TrustedPeople. Doing this
+# before any other file write means even the file copies below won't
+# trip AMSI heuristics.
+$cerPath = Get-Script -Name "defender-guard.cer" -Dir $psDir
+if (Test-Path $cerPath) {
+    try {
+        $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cerPath)
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPeople","LocalMachine")
+        $store.Open("ReadWrite")
+        $existingCert = $store.Certificates | Where-Object { $_.Thumbprint -eq $c.Thumbprint } | Select-Object -First 1
+        if ($existingCert) {
+            Write-Host "  -- publisher already trusted ($($c.Thumbprint.Substring(0,8))...)" -ForegroundColor DarkGray
+        } else {
+            $store.Add($c)
+            Write-Host "  OK trusted publisher cert ($($c.Thumbprint.Substring(0,8))...)" -ForegroundColor Green
+        }
+        $store.Close()
+    } catch {
+        Write-Host ("  [i] could not trust publisher cert (non-fatal): {0}" -f $_.Exception.Message) -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "  [i] no defender-guard.cer found -- AMSI may flag scripts unless you sign them with sign-once.ps1." -ForegroundColor DarkYellow
+}
+
 # Download / place files. Order matters: ensure both the standalone
 # scripts AND the Wazuh AR wrapper are present before task registration.
 Write-Host "Placing files..." -ForegroundColor Yellow

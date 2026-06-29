@@ -81,15 +81,29 @@ After it finishes, do the **manager-side** config above, then restart the agent 
 > - Without line 2: `This script contains malicious content and has been blocked by your antivirus software` (Mark-of-the-Web triggers AMSI).
 > - Do NOT pipe into `iex` — streaming flattens the body and breaks the parser (`The string is missing the terminator: '@`).
 >
-> **AMSI on hardened agents will block the script anyway**, because the body
-> combines `Invoke-WebRequest` + file writes + `Register-ScheduledTask` + writing
-> under `Program Files` — that is the canonical initial-access heuristic. If this
-> happens, sign the scripts once on any Windows dev box using PowerShell's
-> `Set-AuthenticodeSignature` with a self-signed code-signing cert, then import
-> the cert into `LocalMachine\TrustedPeople` on the agent (or use
-> `Add-Type -AssemblyName System.Security.Cryptography.X509Certificates` +
-> `New-Object X509Store("TrustedPeople","LocalMachine")`). Once the publisher
-> is trusted, AMSI stops flagging the scripts.
+> **AMSI on hardened agents will block the script anyway.** When Defender AMSI is
+> unsure about a script it creates a probe file `__PSScriptPolicyTest_<hash>.ps1`
+> in `C:\Windows\SystemTemp\` to inspect it. If you see that path in alerts
+> (Sysmon EventID 11, rule 92205), the AR launched but AMSI flagged the script.
+> Persistent on this agent every AR run will leave that probe.
+>
+> **Fix once with a self-signed code-signing cert.**
+>
+> Run **once** on any Windows dev box (PowerShell 5.1 or 7+):
+> ```powershell
+> # cd into a fresh clone of this folder
+> .\sign-once.ps1
+> # follow the printed "Next steps" - commit and push the regenerated .ps1/.cmd + defender-guard.cer
+> ```
+> What that does:
+> 1. Creates a self-signed code-signing cert (5-year, `CurrentUser\My`)
+> 2. Exports the public cert as `defender-guard.cer`
+> 3. Signs every `.ps1` and `.cmd` in the folder with `Set-AuthenticodeSignature`
+>
+> After you commit and push, agents that run `install.ps1` will:
+> 1. Download `defender-guard.cer`
+> 2. Import it into `LocalMachine\TrustedPeople`
+> 3. From that point AMSI sees a trusted publisher for every signed script - no test probe, no quarantine, no `malicious content blocked` error
 
 ---
 
@@ -102,7 +116,9 @@ After it finishes, do the **manager-side** config above, then restart the agent 
 | `watchdog-service.ps1` | 1 s poll: keeps `WinDefend` alive + re-issues `Set-MpPreference -DisableRealtimeMonitoring $false`. |
 | `enforce-tamper-protection.ps1` | Audit + re-enforce; surfaces Tamper OFF status with GUI/Intune/GPO enable path. |
 | `tamper-protection-policy.xml` | Ready-to-paste Intune OMA-URI + GPO ADMX policy for Tamper Protection. |
-| `install.ps1` | One-shot installer. Downloads, places, registers both Scheduled Tasks, audits Tamper. |
+| `install.ps1` | One-shot installer. Downloads, places, registers both Scheduled Tasks, imports publisher cert. |
+| `sign-once.ps1` | Run once on a Windows dev box. Creates cert, signs every script, exports `.cer`. |
+| `defender-guard.cer` | Public cert produced by `sign-once.ps1`; trusted by `install.ps1` on the agent. (Only present after you run `sign-once.ps1`.) |
 | `ossec.conf` | Manager-side `<command>` + `<active-response>` blocks. |
 
 ### reenable-defender.cmd

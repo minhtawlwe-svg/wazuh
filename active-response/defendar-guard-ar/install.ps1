@@ -153,7 +153,7 @@ if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Path $psDir -Force 
 # before any other file write means even the file copies below won't
 # trip AMSI heuristics.
 $cerPath = Get-Script -Name "defender-guard.cer" -Dir $psDir -Optional
-if (Test-Path $cerPath) {
+if ($cerPath -and (Test-Path $cerPath)) {
     try {
         $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($cerPath)
         $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPeople","LocalMachine")
@@ -184,7 +184,7 @@ $cmdWrap = Get-Script -Name "reenable-defender.cmd"     -Dir $binDir
 
 # Normalize any pre-existing files so older LF copies self-heal.
 foreach ($p in @($psEvent, $psSvc, $psAudit)) {
-    if (Test-Path $p) { Guard-NormalizeLineEndings -Path $p }
+    if ($p -and (Test-Path $p)) { Guard-NormalizeLineEndings -Path $p }
 }
 
 # Register BOTH tasks. The service-watcher covers every disable path

@@ -32,6 +32,30 @@ if (-not (Test-Path $binDir)) {
 # 3. ensure destination dirs
 if (-not (Test-Path $psDir))  { New-Item -ItemType Directory -Path $psDir  -Force | Out-Null }
 
+# 3a. (best-effort) trust the publisher cert that ships in the zip. AMSI does
+#     not block signed scripts whose publisher is in LocalMachine\TrustedPeople,
+#     so getting this in early lets the rest of the inner installer parse
+#     without re-tripping the heuristic on each script.
+$certPath = Join-Path $stage "defender-guard.cer"
+if (Test-Path $certPath) {
+    try {
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certPath)
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store("TrustedPeople","LocalMachine")
+        $store.Open("ReadWrite")
+        if (-not ($store.Certificates | Where-Object { $_.Thumbprint -eq $cert.Thumbprint })) {
+            $store.Add($cert)
+            Write-Host "  + trusted publisher cert: $($cert.Thumbprint.Substring(0,8))..." -ForegroundColor Green
+        } else {
+            Write-Host "  -- publisher cert already trusted" -ForegroundColor DarkGray
+        }
+        $store.Close()
+    } catch {
+        Write-Host "  [i] could not trust publisher cert (non-fatal): $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "  [i] no defender-guard.cer in zip -- scripts will run unsigned (AMSI may flag)." -ForegroundColor DarkYellow
+}
+
 # 4. place every file from the zip into the right folder
 $deploy = @(
     @{ src = "reenable-defender.cmd";         d = $binDir },

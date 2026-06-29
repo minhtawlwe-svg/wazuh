@@ -75,18 +75,29 @@ After it finishes, do the **manager-side** config in **Section 3**, then restart
 
 > Manual file placement (without the installer) is documented in **Section 2**.
 
-### Optional — INSTANT local enforcement (no manager round-trip)
+### INSTANT local enforcement (recommended — no manager round-trip on first detection)
 
-The manager AR reacts in a few seconds. For **immediate** re-enable the moment Defender is
-turned off, also register the local event-triggered watcher (fires on Defender Event ID
-5001/5010/5012). Run in an **elevated** PowerShell on the agent:
+The Wazuh manager AR reacts in a few seconds (alert → manager → agent). That gap lets
+a real-time-protection **disable** sit briefly before the second detection re-fires the AR.
+To force re-enable **immediately on the first state change**, register the local
+event-triggered Scheduled Task. Run in an **elevated** PowerShell on the agent:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install-watcher.ps1
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install-watcher.ps1 | iex
 ```
 
-This creates a Scheduled Task `Defender-Guard-Instant-ReEnable` (runs as SYSTEM) that
-re-runs `reenable-defender.ps1` instantly — independent of the Wazuh manager.
+This creates a Scheduled Task `Defender-Guard-Instant-ReEnable` (runs as SYSTEM, highest
+privileges, no delay) that **fires the instant** `Microsoft-Windows-Windows Defender/Operational`
+records any state change (Event IDs 5001 / 5010 / 5012) and calls `reenable-defender.ps1`
+directly. Independent of the Wazuh manager; closes the first-disable detection gap.
+
+Uninstall:
+```powershell
+Unregister-ScheduledTask -TaskName 'Defender-Guard-Instant-ReEnable' -Confirm:$false
+```
+
+> The script now auto-detects AR-vs-standalone mode (Wazuh sends a JSON stdin line; the
+> Scheduled Task launches with no stdin), so the same `reenable-defender.ps1` handles both.
 
 ---
 
@@ -95,7 +106,8 @@ re-runs `reenable-defender.ps1` instantly — independent of the Wazuh manager.
 | File | Role | Destination (on agent) |
 |------|------|------------------------|
 | `reenable-defender.cmd` | Wrapper Wazuh calls | `C:\Program Files (x86)\ossec-agent\active-response\bin\` |
-| `reenable-defender.ps1` | Does the actual work | `C:\Program Files\Sysinternals\` |
+| `reenable-defender.ps1` | Does the actual work (AR + standalone) | `C:\Program Files\Sysinternals\` |
+| `install-watcher.ps1` | Registers the instant local re-enable Scheduled Task | run on agent only |
 
 ### reenable-defender.cmd
 ```bat
@@ -174,9 +186,10 @@ Set-MpPreference -DisableRealtimeMonitoring $true     # triggers rule 100620
 Get-Content "C:\Program Files (x86)\ossec-agent\active-response\active-responses.log" -Tail 6
 ```
 
-**PASS criteria:** the log now shows
+**PASS criteria:** the log shows one of these patterns within ~1s (instant watcher) or ~5s (manager AR):
 ```
-reenable-defender: Starting. stdin=...
+reenable-defender: Starting (AR). stdin=...       # from manager AR
+reenable-defender: Starting (standalone).         # from instant watcher
 reenable-defender: Verification Ended. RealTimeProtectionEnabled=True
 reenable-defender: Ended.
 ```
@@ -213,4 +226,10 @@ Use **both**: Tamper Protection blocks the common path; rule 100620 + this AR ca
 sudo cp /var/ossec/etc/ossec.conf.bak.<timestamp> /var/ossec/etc/ossec.conf
 sudo systemctl restart wazuh-manager
 ```
-**Agent:** delete the two deployed files and `Restart-Service WazuhSvc`.
+**Agent:** delete the two deployed files, unregister the instant watcher, and `Restart-Service WazuhSvc`:
+```powershell
+Unregister-ScheduledTask -TaskName 'Defender-Guard-Instant-ReEnable' -Confirm:$false
+Remove-Item "C:\Program Files (x86)\ossec-agent\active-response\bin\reenable-defender.cmd"
+Remove-Item "C:\Program Files\Sysinternals\reenable-defender.ps1"
+Restart-Service WazuhSvc
+```

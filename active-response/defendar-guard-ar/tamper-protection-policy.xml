@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tamper Protection policy for Defender-Guard
+  --------------------------------------------
+  Import this Custom Intune policy or save as a GPO ADMX-backed registry value.
+
+  What this does (WHY we ship it from the AR repo):
+    Even with the two local watchers (event + service), a user with admin rights
+    can flip Set-MpPreference -DisableRealtimeMonitoring $true and have ~1 second
+    of unprotected state before the watchers re-enable. Tamper Protection ON is
+    the only mechanism that REJECTS the disable call itself -- no gap to cover.
+
+  SettingsPolicy / Settings catalog reference:
+    "DisableRealtimeMonitoring"        : 0   (re-enforce)
+    "TamperProtection"                  : 1   (block)
+    "DisableTamperProtection"           : 0   (non-admins can't flip)
+
+  Attack paths blocked at the source:
+    1. Set-MpPreference -DisableRealtimeMonitoring $true  -> REJECTED
+    2. Direct registry write to HKLM\...\DisableRealtimeMonitoring   -> REJECTED
+    3. Stop-Service WinDefend                              -> REJECTED
+    4. Delete Defender folder                               -> REJECTED
+    5. TamperProtection = $false attempt                   -> audited (Event 5019)
+-->
+<PolicyDefinitions xmlns="http://schemas.microsoft.com/GroupPolicy/GPOOperations/Manifest">
+  <!--
+    ========================================================================
+    OPTION 1 - INTUNE: Settings catalog (Windows 10 / 11)
+    ========================================================================
+    Endpoint security > Antivirus > Windows Defender Security Center (preview)
+      Tamper Protection (Device): Enabled
+      Real-time protection: Enabled
+    OR  Endpoint security > Attack surface reduction:
+      These flow through the same CSP keys below.
+  -->
+
+  <!--
+    ========================================================================
+    OPTION 2 - INTUNE: Custom OMA-URI
+    ========================================================================
+    Add > Profile type: Templates > Windows 10/11 > Custom
+    OMA-URI: ./Device/Vendor/MSFT/Defender/DisableRealtimeMonitoring
+    Data type:  Integer
+    Value:      0
+    ----------------------------------------------------------
+    OMA-URI: ./Device/Vendor/MSFT/Defender/TamperProtection
+    Data type:  Integer
+    Value:      1
+    ----------------------------------------------------------
+    OMA-URI: ./Device/Vendor/MSFT/Defender/AllowCloudProtection
+    Data type:  Integer
+    Value:      1
+    ----------------------------------------------------------
+    OMA-URI: ./Device/Vendor/MSFT/Defender/DisableBehaviorMonitoring
+    Data type:  Integer
+    Value:      0
+    ----------------------------------------------------------
+    OMA-URI: ./Device/Vendor/MSFT/Defender/DisableIOAVProtection
+    Data type:  Integer
+    Value:      0
+    ----------------------------------------------------------
+    OMA-URI: ./Device/Vendor/MSFT/Defender/DisableScriptScanning
+    Data type:  Integer
+    Value:      0
+  -->
+
+  <!--
+    ========================================================================
+    OPTION 3 - GPO ADMX (manual)
+    ========================================================================
+    ADMX path:
+      Computer\Policies\Administrative Templates\Windows Components\
+      Microsoft Defender Antivirus\Real-time Protection
+      + "Configure Microsoft Defender Antivirus real-time protection" = Enabled
+      + "Tamper Protection"                                         = Enabled
+
+      Computer\Policies\Administrative Templates\Windows Components\
+      Microsoft Defender Antivirus
+      + "Turn off real-time protection"                             = Disabled
+
+    Resulting registry values (set by the ADMX):
+      HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\DisableRealtimeMonitoring = 0
+      HKLM\SOFTWARE\Policies\Microsoft\Windows Defender\TamperProtection        = 1
+  -->
+
+  <!--
+    ========================================================================
+    OPTION 4 - On-agent enforcement script (audit / fallback)
+    ========================================================================
+    Run elevated on the agent to check effective state:
+      Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Real-Time Protection' `
+                       -Name DisableRealtimeMonitoring -ErrorAction SilentlyContinue
+      # expect: DisableRealtimeMonitoring = 0  (or key not present)
+
+    Audit a tamper attempt (every flip logs Event 5010 / 5012):
+      Get-WinEvent -LogName 'Microsoft-Windows-Windows Defender/Operational' `
+                   -FilterXPath "*[System[EventID=5010 or EventID=5012 or EventID=5019]]" `
+                   -MaxEvents 50
+  -->
+</PolicyDefinitions>

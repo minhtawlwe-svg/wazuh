@@ -75,7 +75,35 @@ After it finishes, do the **manager-side** config in **Section 3**, then restart
 
 > Manual file placement (without the installer) is documented in **Section 2**.
 
-### INSTANT local enforcement — layered (recommended — no manager round-trip on first detection)
+### INSTANT local enforcement — layered defense (recommended)
+
+Layer 0 is the REAL prevention — Tamper Protection ON. Layers 1-2 are failsafe in case it ever
+turns off. Deploy in this order for best protection:
+
+#### Layer 0 — Enable Tamper Protection (eliminates the 1s window)
+
+Tamper Protection is the only mechanism that REJECTS the disable call at the source. Once on,
+no ~1s gap exists because the disable attempt fails entirely.
+
+GUI (one-off):
+```
+Windows Security → Virus & threat protection → Manage settings → Tamper Protection = ON
+```
+
+Fleet (Intune / GPO):
+See **`tamper-protection-policy.xml`** — copy-paste-ready OMA-URI values and ADMX paths.
+
+Audit on the agent:
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\Sysinternals\enforce-tamper-protection.ps1"
+```
+Reports effective state + recent tamper-related events (5010/5012/5019).
+
+> **Why not a local script?** Microsoft by design does not allow a local script to flip Tamper
+> Protection ON. The only ways are GUI, Intune, or GPO. This is by design — otherwise any
+> privileged malware could disable it.
+
+#### Layer 1 — Watchers (≤ 1 s reaction to any disable that slips through Layer 0)
 
 The Wazuh manager AR reacts in a few seconds (alert → manager → agent). That gap lets a
 real-time-protection **disable** sit briefly before the second detection re-fires the AR.
@@ -118,6 +146,8 @@ Unregister-ScheduledTask 'Defender-Guard-Event-Watch','Defender-Guard-Service-Wa
 | `reenable-defender.ps1` | Does the actual work (AR + standalone) | `C:\Program Files\Sysinternals\` |
 | `watchdog-service.ps1` | 1s poll watchdog (service liveness + preference re-enforce) | `C:\Program Files\Sysinternals\` |
 | `install-watcher.ps1` | Registers BOTH instant local Scheduled Tasks | run on agent only |
+| `enforce-tamper-protection.ps1` | Audit + re-enforce; surfaces Tamper OFF status | `C:\Program Files\Sysinternals\` |
+| `tamper-protection-policy.xml` | Intune OMA-URI + GPO ADMX snippets for Tamper Protection | manager / Intune side |
 
 ### reenable-defender.cmd
 ```bat
@@ -224,14 +254,23 @@ Get-Service WinDefend                                # expect: Running
 
 ---
 
-## 7. Real Prevention — Tamper Protection (recommended)
+## 7. Audit & Verify
 
-An AR is reactive (a few-second gap). To *block* the disable outright:
+Run on each agent to confirm the layered defense is active:
 
-- **GUI:** Windows Security → Virus & threat protection → Manage settings → **Tamper Protection = On**
-- **Fleet:** Intune / GPO (`Defender` → Tamper Protection). By design it cannot be set by a local script.
+```powershell
+# 1. Tamper Protection must be ON (real prevention)
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\Sysinternals\enforce-tamper-protection.ps1"
 
-Use **both**: Tamper Protection blocks the common path; rule 100620 + this AR catch and self-heal anything that slips through.
+# 2. Both watchers registered
+Get-ScheduledTask | Where-Object { $_.TaskName -like 'Defender-Guard-*' }
+
+# 3. Real-time protection is currently ON
+(Get-MpComputerStatus).RealTimeProtectionEnabled
+
+# 4. Wazuh AR file present
+Test-Path "C:\Program Files (x86)\ossec-agent\active-response\bin\reenable-defender.cmd"
+```
 
 ---
 
@@ -242,12 +281,16 @@ Use **both**: Tamper Protection blocks the common path; rule 100620 + this AR ca
 sudo cp /var/ossec/etc/ossec.conf.bak.<timestamp> /var/ossec/etc/ossec.conf
 sudo systemctl restart wazuh-manager
 ```
-**Agent:** delete the deployed files, unregister both watchers, and `Restart-Service WazuhSvc`:
+**Agent:** delete the deployed files, unregister both watchers, then `Restart-Service WazuhSvc`:
 ```powershell
 Unregister-ScheduledTask 'Defender-Guard-Event-Watch','Defender-Guard-Service-Watch' -Confirm:$false
 Remove-Item "C:\Program Files (x86)\ossec-agent\active-response\bin\reenable-defender.cmd"
 Remove-Item "C:\Program Files\Sysinternals\reenable-defender.ps1"
 Remove-Item "C:\Program Files\Sysinternals\watchdog-service.ps1"
 Remove-Item "C:\Program Files\Sysinternals\install-watcher.ps1"
+Remove-Item "C:\Program Files\Sysinternals\enforce-tamper-protection.ps1"
 Restart-Service WazuhSvc
 ```
+
+> Tamper Protection itself is a separate Intune/GPO policy — remove or disable it
+> through the same channel you used to enable it.

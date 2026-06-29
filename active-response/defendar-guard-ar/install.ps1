@@ -1,5 +1,8 @@
-# install.ps1 - Defender-Guard Active Response one-line installer
-# Downloads the AR scripts from GitHub and places them in the correct folders.
+# install.ps1 - Defender-Guard Active Response: one-step installer.
+#
+# Downloads all files, places them in the correct folders, registers the two
+# Scheduled Tasks (event + service watcher), and runs the Layer-0 Tamper
+# Protection audit. Runs end-to-end so the agent is fully defended in one shot.
 #
 # One-liner (run in an ELEVATED PowerShell):
 #   irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 | iex
@@ -9,63 +12,63 @@ $base   = "https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-res
 $binDir = "C:\Program Files (x86)\ossec-agent\active-response\bin"
 $psDir  = "C:\Program Files\Sysinternals"
 
-Write-Host "=== Defender-Guard AR installer ===" -ForegroundColor Cyan
+Write-Host "=== Defender-Guard one-step installer ===" -ForegroundColor Cyan
 
-# 1. must be admin (writing under Program Files)
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-          ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Host "ERROR: run this in an ELEVATED PowerShell (Run as Administrator)." -ForegroundColor Red
-    return
-}
-
-# 2. sanity check: is the Wazuh agent installed?
-if (-not (Test-Path $binDir)) {
-    Write-Host "ERROR: Wazuh agent AR folder not found:`n  $binDir" -ForegroundColor Red
-    Write-Host "Install the Wazuh agent first, then re-run." -ForegroundColor Red
-    return
-}
-
-# 3. ensure ps1 destination exists
+# 1. helpers: download first so dot-source works after elevation check.
 if (-not (Test-Path $psDir)) { New-Item -ItemType Directory -Path $psDir -Force | Out-Null }
-
-# 4. download the files
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Write-Host "Downloading reenable-defender.cmd ..." -ForegroundColor Yellow
-Invoke-WebRequest "$base/reenable-defender.cmd"           -OutFile "$binDir\reenable-defender.cmd"          -UseBasicParsing
-Write-Host "Downloading reenable-defender.ps1 ..."         -ForegroundColor Yellow
-Invoke-WebRequest "$base/reenable-defender.ps1"           -OutFile "$psDir\reenable-defender.ps1"           -UseBasicParsing
-Write-Host "Downloading watchdog-service.ps1 ..."          -ForegroundColor Yellow
-Invoke-WebRequest "$base/watchdog-service.ps1"            -OutFile "$psDir\watchdog-service.ps1"            -UseBasicParsing
-Write-Host "Downloading install-watcher.ps1 ..."           -ForegroundColor Yellow
-Invoke-WebRequest "$base/install-watcher.ps1"             -OutFile "$psDir\install-watcher.ps1"             -UseBasicParsing
-Write-Host "Downloading enforce-tamper-protection.ps1 ..." -ForegroundColor Yellow
-Invoke-WebRequest "$base/enforce-tamper-protection.ps1"   -OutFile "$psDir\enforce-tamper-protection.ps1"   -UseBasicParsing
 
-# 5. verify
-$ok1 = Test-Path "$binDir\reenable-defender.cmd"
-$ok2 = Test-Path "$psDir\reenable-defender.ps1"
-$ok3 = Test-Path "$psDir\watchdog-service.ps1"
-$ok4 = Test-Path "$psDir\install-watcher.ps1"
-$ok5 = Test-Path "$psDir\enforce-tamper-protection.ps1"
-Write-Host ""
-Write-Host ("  {0}  {1}\reenable-defender.cmd"           -f $(if($ok1){"[OK]"}else{"[!!]"}), $binDir)
-Write-Host ("  {0}  {1}\reenable-defender.ps1"           -f $(if($ok2){"[OK]"}else{"[!!]"}), $psDir)
-Write-Host ("  {0}  {1}\watchdog-service.ps1"            -f $(if($ok3){"[OK]"}else{"[!!]"}), $psDir)
-Write-Host ("  {0}  {1}\install-watcher.ps1"             -f $(if($ok4){"[OK]"}else{"[!!]"}), $psDir)
-Write-Host ("  {0}  {1}\enforce-tamper-protection.ps1"   -f $(if($ok5){"[OK]"}else{"[!!]"}), $psDir)
+$helpers = "$psDir\_install-helpers.ps1"
+Write-Host "Downloading _install-helpers.ps1 ..." -ForegroundColor Yellow
+Invoke-WebRequest "$base/_install-helpers.ps1" -OutFile $helpers -UseBasicParsing
+. $helpers
 
-if ($ok1 -and $ok2 -and $ok3 -and $ok4 -and $ok5) {
-    Write-Host "`nAgent side installed." -ForegroundColor Green
-    Write-Host "Next (recommended order):" -ForegroundColor Cyan
-    Write-Host "  1. Tamper Protection -- REAL prevention (eliminates the 1s window):" -ForegroundColor Cyan
-    Write-Host "       Intune/GPO -- see tamper-protection-policy.xml" -ForegroundColor Cyan
-    Write-Host "       powershell -ExecutionPolicy Bypass -File `"$psDir\enforce-tamper-protection.ps1`" -ForegroundColor Cyan
-    Write-Host "  2. Register watchers -- failsafe in case Tamper is off:" -ForegroundColor Cyan
-    Write-Host "       powershell -ExecutionPolicy Bypass -File `"$psDir\install-watcher.ps1`"" -ForegroundColor Cyan
-    Write-Host "       Registers TWO tasks: Defender-Guard-Event-Watch + Defender-Guard-Service-Watch" -ForegroundColor Cyan
-    Write-Host "  3. Add the <command>/<active-response> blocks on the MANAGER (see README section 3)." -ForegroundColor Cyan
-    Write-Host "  4. Restart-Service WazuhSvc" -ForegroundColor Cyan
-} else {
-    Write-Host "`nInstall incomplete - check the [!!] lines above." -ForegroundColor Red
+# 2. must be admin (writing under Program Files AND registering Scheduled Tasks).
+Assert-Admin
+
+# 3. sanity check: is the Wazuh agent installed?
+Assert-WazuhAgent -BinDir $binDir
+
+# 4. download all script files (idempotent: skips files that already match).
+Write-Host "Downloading files..." -ForegroundColor Yellow
+$files = @(
+    @{ u = "reenable-defender.cmd";         d = $binDir },
+    @{ u = "reenable-defender.ps1";         d = $psDir  },
+    @{ u = "watchdog-service.ps1";          d = $psDir  },
+    @{ u = "enforce-tamper-protection.ps1"; d = $psDir  },
+    @{ u = "tamper-protection-policy.xml";  d = $psDir  }
+)
+foreach ($f in $files) {
+    $dest = Join-Path $f.d $f.u
+    if (-not (Test-Path $dest)) {
+        Write-Host "  -> $($f.u)" -ForegroundColor Yellow
+        Invoke-WebRequest "$base/$($f.u)" -OutFile $dest -UseBasicParsing
+    } else {
+        Write-Host "  --  $($f.u) (exists, skipping)" -ForegroundColor DarkGray
+    }
 }
+
+# 5. verify all files present, abort if not.
+$required = @(
+    "$binDir\reenable-defender.cmd",
+    "$psDir\reenable-defender.ps1",
+    "$psDir\watchdog-service.ps1",
+    "$psDir\enforce-tamper-protection.ps1",
+    "$psDir\tamper-protection-policy.xml"
+)
+$missing = $required | Where-Object { -not (Test-Path $_) }
+if ($missing) {
+    Write-Host ""
+    Write-Host "ERROR: files missing after download:" -ForegroundColor Red
+    $missing | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    return
+}
+
+# 6. register the two Scheduled Tasks (Layer-1 failsafe).
+Install-GuardWatchers -psDir $psDir
+
+# 7. run the Layer-0 Tamper audit (idempotent; surfaces Tamper ON/OFF + GUI hint).
+Invoke-GuardTamperCheck -psDir $psDir
+
+# 8. final banner.
+Show-GuardFinal -binDir $binDir -psDir $psDir

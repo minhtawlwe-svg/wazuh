@@ -64,12 +64,19 @@ On the Wazuh **agent**, open **PowerShell as Administrator** and run:
 irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 | iex
 ```
 
-This downloads and places both scripts in the correct folders:
+This single command does everything end-to-end:
+
+1. Downloads all 6 files (`_install-helpers.ps1`, `reenable-defender.cmd`, `reenable-defender.ps1`, `watchdog-service.ps1`, `enforce-tamper-protection.ps1`, `tamper-protection-policy.xml`)
+2. Verifies the Wazuh agent AR folder exists (aborts with hint if not)
+3. Places files in the right folders (`binDir` for the cmd wrapper, `psDir` for everything else)
+4. Registers both Scheduled Tasks: `Defender-Guard-Event-Watch` and `Defender-Guard-Service-Watch`
+5. Runs the Layer-0 Tamper Protection audit and shows the GUI/Intune/GPO path to enable it
+6. Prints the final summary + verification commands
 
 | File | Destination |
 |------|-------------|
 | `reenable-defender.cmd` | `C:\Program Files (x86)\ossec-agent\active-response\bin\` |
-| `reenable-defender.ps1` | `C:\Program Files\Sysinternals\` |
+| `_install-helpers.ps1`, `reenable-defender.ps1`, `watchdog-service.ps1`, `enforce-tamper-protection.ps1`, `tamper-protection-policy.xml` | `C:\Program Files\Sysinternals\` |
 
 After it finishes, do the **manager-side** config in **Section 3**, then restart the agent (`Restart-Service WazuhSvc`).
 
@@ -77,64 +84,50 @@ After it finishes, do the **manager-side** config in **Section 3**, then restart
 
 ### INSTANT local enforcement — layered defense (recommended)
 
-Layer 0 is the REAL prevention — Tamper Protection ON. Layers 1-2 are failsafe in case it ever
-turns off. Deploy in this order for best protection:
+Layer 0 is the REAL prevention — Tamper Protection ON. Layer 1 is the failsafe in case it ever
+turns off. Both layers are deployed automatically by `install.ps1` above.
 
-#### Layer 0 — Enable Tamper Protection (eliminates the 1s window)
+#### Layer 0 — Tamper Protection (eliminates the 1 s window)
 
 Tamper Protection is the only mechanism that REJECTS the disable call at the source. Once on,
-no ~1s gap exists because the disable attempt fails entirely.
+no ~1 s gap exists because the disable attempt fails entirely. After `install.ps1` finishes, it
+prints the current state; if Tamper is OFF, enable it via ONE of:
 
-GUI (one-off):
-```
-Windows Security → Virus & threat protection → Manage settings → Tamper Protection = ON
-```
-
-Fleet (Intune / GPO):
-See **`tamper-protection-policy.xml`** — copy-paste-ready OMA-URI values and ADMX paths.
-
-Audit on the agent:
-```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Program Files\Sysinternals\enforce-tamper-protection.ps1"
-```
-Reports effective state + recent tamper-related events (5010/5012/5019).
+- **GUI** (single machine): Windows Security → Virus & threat protection → Manage settings → Tamper Protection = ON
+- **Fleet (Intune):** Endpoint security → Antivirus → Tamper Protection = Enabled
+- **Fleet (GPO):** Computer\Administrative Templates\Windows Components\Microsoft Defender
+  Antivirus\Real-time Protection → Tamper Protection = Enabled
 
 > **Why not a local script?** Microsoft by design does not allow a local script to flip Tamper
-> Protection ON. The only ways are GUI, Intune, or GPO. This is by design — otherwise any
-> privileged malware could disable it.
+> Protection ON. Only GUI, Intune, or GPO can. This is by design — otherwise any privileged
+> malware could disable it.
 
 #### Layer 1 — Watchers (≤ 1 s reaction to any disable that slips through Layer 0)
 
-The Wazuh manager AR reacts in a few seconds (alert → manager → agent). That gap lets a
-real-time-protection **disable** sit briefly before the second detection re-fires the AR.
-To force re-enable **immediately on the first state change**, register the local watchers.
-Run in an **elevated** PowerShell on the agent:
-
-```powershell
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install-watcher.ps1 | iex
-```
-
-This registers **TWO** Scheduled Tasks (both run as SYSTEM, highest privileges):
+`install.ps1` automatically registers **TWO** Scheduled Tasks (both run as SYSTEM, highest privileges):
 
 | Task | Catches | Reaction time | Resource |
 |------|---------|---------------|----------|
 | `Defender-Guard-Event-Watch` | `Set-MpPreference ... = $true` flips logged in `Microsoft-Windows-Windows Defender/Operational` (Event 5001/5010/5012) | ~100 ms–1 s (Windows event log write delay) | 0 % CPU at idle, fires only on event |
 | `Defender-Guard-Service-Watch` | `Stop-Service WinDefend` and any preference flip NOT caught by the event log | ≤ 1 s poll (`watchdog-service.ps1`) | ~20 MB RAM, ~0.01 % CPU |
 
-Together: every known disable path is covered within ≤ 1 s. Independent of the Wazuh manager.
+To re-register the tasks later (e.g., after a schema bump) without re-downloading:
+```powershell
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install-watcher.ps1 | iex
+```
 
 > **Performance:** `watchdog-service.ps1` polls via SCM (user-mode, no kernel impact). Same
 > pattern as Nagios / Datadog / Zabbix / MDE sensors on millions of production machines.
 > Resource use is negligible (~20 MB RAM, ~0.01 % CPU, zero disk IO at idle). Safe on laptops
 > and weak VMs.
 
-Uninstall:
+Uninstall watchers (files are kept):
 ```powershell
 Unregister-ScheduledTask 'Defender-Guard-Event-Watch','Defender-Guard-Service-Watch' -Confirm:$false
 ```
 
-> The script now auto-detects AR-vs-standalone mode (Wazuh sends a JSON stdin line; the
-> Scheduled Task launches with no stdin), so the same `reenable-defender.ps1` handles both.
+> `reenable-defender.ps1` auto-detects AR-vs-standalone mode (Wazuh sends a JSON stdin line;
+> the Scheduled Task launches with no stdin), so the same script handles both invocation paths.
 
 ---
 
@@ -145,7 +138,8 @@ Unregister-ScheduledTask 'Defender-Guard-Event-Watch','Defender-Guard-Service-Wa
 | `reenable-defender.cmd` | Wrapper Wazuh calls | `C:\Program Files (x86)\ossec-agent\active-response\bin\` |
 | `reenable-defender.ps1` | Does the actual work (AR + standalone) | `C:\Program Files\Sysinternals\` |
 | `watchdog-service.ps1` | 1s poll watchdog (service liveness + preference re-enforce) | `C:\Program Files\Sysinternals\` |
-| `install-watcher.ps1` | Registers BOTH instant local Scheduled Tasks | run on agent only |
+| `_install-helpers.ps1` | Shared installer helpers (register tasks, audit) — dot-sourced | `C:\Program Files\Sysinternals\` |
+| `install-watcher.ps1` | Thin wrapper: re-register the two Scheduled Tasks | run on agent only |
 | `enforce-tamper-protection.ps1` | Audit + re-enforce; surfaces Tamper OFF status | `C:\Program Files\Sysinternals\` |
 | `tamper-protection-policy.xml` | Intune OMA-URI + GPO ADMX snippets for Tamper Protection | manager / Intune side |
 
@@ -288,7 +282,9 @@ Remove-Item "C:\Program Files (x86)\ossec-agent\active-response\bin\reenable-def
 Remove-Item "C:\Program Files\Sysinternals\reenable-defender.ps1"
 Remove-Item "C:\Program Files\Sysinternals\watchdog-service.ps1"
 Remove-Item "C:\Program Files\Sysinternals\install-watcher.ps1"
+Remove-Item "C:\Program Files\Sysinternals\_install-helpers.ps1"
 Remove-Item "C:\Program Files\Sysinternals\enforce-tamper-protection.ps1"
+Remove-Item "C:\Program Files\Sysinternals\tamper-protection-policy.xml"
 Restart-Service WazuhSvc
 ```
 

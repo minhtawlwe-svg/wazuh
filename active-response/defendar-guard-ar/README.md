@@ -10,7 +10,7 @@
 
 **On agent (elevated PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 | iex
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1; & "$env:TEMP\install.ps1"
 ```
 
 **On manager:**
@@ -61,8 +61,14 @@ Restart-Service WazuhSvc   # on agent
 On the Wazuh **agent**, open **PowerShell as Administrator** and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 | iex
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1; & "$env:TEMP\install.ps1"
 ```
+
+> **Why `-OutFile + &` instead of `| iex`?** Streaming into `iex` flattens the script
+> body onto a single parse line; here-strings (`@"..."@`) lose their terminators and
+> the parser throws `The string is missing the terminator: '@`. Saving to disk and
+> executing the file keeps proper line endings, which is required for the helpers
+> to parse. The installer auto-detects this and self-bootstraps if invoked via `iex`.
 
 This single command does everything end-to-end:
 
@@ -113,7 +119,7 @@ prints the current state; if Tamper is OFF, enable it via ONE of:
 
 To re-register the tasks later (e.g., after a schema bump) without re-downloading:
 ```powershell
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install-watcher.ps1 | iex
+irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install-watcher.ps1 -OutFile $env:TEMP\iw.ps1; & "$env:TEMP\iw.ps1"
 ```
 
 > **Performance:** `watchdog-service.ps1` polls via SCM (user-mode, no kernel impact). Same

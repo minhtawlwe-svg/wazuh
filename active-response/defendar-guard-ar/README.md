@@ -11,12 +11,24 @@
 **On agent (elevated PowerShell):**
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-# Force a clean copy every run so a previous partial install doesn't get re-executed.
-if (Test-Path $env:TEMP\install.ps1) { Remove-Item $env:TEMP\install.ps1 -Force }
-irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1
-Unblock-File $env:TEMP\install.ps1
-& "$env:TEMP\install.ps1"
+# Cache-bust on every run: ?v= forces IRM to treat it as a fresh request,
+# and the destination path includes the timestamp so the file is new even
+# if Remove-Item fails silently. Both layers needed on PS 7 where IRM
+# sometimes refuses to overwrite an existing file.
+$stamp   = Get-Date -Format 'yyyyMMddHHmmss'
+$destDir = Join-Path $env:TEMP "defender-guard-$stamp"
+New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+irm "https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1?v=$stamp" -OutFile "$destDir\install.ps1"
+Unblock-File "$destDir\install.ps1"
+& "$destDir\install.ps1"
 ```
+
+> **If you have been running an OLD copy of `install.ps1` (it errors on
+> line 156 with `Test-Path: ... null ...`), remove all old `defender-guard-*`
+> folders under `$env:TEMP` first:**
+> ```powershell
+> Get-ChildItem $env:TEMP -Filter 'defender-guard-*' -Directory | Remove-Item -Recurse -Force
+> ```
 
 **On manager** (`/var/ossec/etc/ossec.conf` inside `<ossec_config>`):
 ```xml

@@ -144,9 +144,8 @@ else
     echo "[+] FIM directories already configured."
 fi
 
-echo "[*] Setting up Weekly rules-update Cronjob..."
-# Add cron job to update automatically at 11:30 PM every Sunday (Weekly)
-(crontab -l 2>/dev/null | grep -v "/usr/local/bin/update-yara-rules.sh" ; echo "30 23 * * 0 /usr/local/bin/update-yara-rules.sh") | crontab -
+echo "[*] Setting up Daily rules-update Cronjob (12:30 PM)..."
+(crontab -l 2>/dev/null | grep -v "/usr/local/bin/update-yara-rules.sh" ; echo "30 12 * * * /usr/local/bin/update-yara-rules.sh") | crontab -
 
 # Add cron job to clean up quarantine directory (files older than 30 days) daily at 1:00 AM
 (crontab -l 2>/dev/null | grep -v "/var/ossec/active-response/quarantine" ; echo "0 1 * * * find /var/ossec/active-response/quarantine -type f -mtime +30 -delete") | crontab -

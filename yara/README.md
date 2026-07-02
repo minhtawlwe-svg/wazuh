@@ -24,9 +24,9 @@ File moved to /var/ossec/active-response/quarantine/ (chmod 000)
 
 | File | Where it goes |
 |---|---|
-| `install.sh` | Run on each Linux **agent** (root). Installs YARA 4.5.5, rules, AR script, FIM config, weekly rules-update cron, quarantine-cleanup cron. |
+| `install.sh` | Run on each Linux **agent** (root). Installs YARA 4.5.5, rules, AR script, FIM config, daily rules-update cron (12:30 PM), quarantine-cleanup cron. |
 | `rule-collection/yara_rules.yar` | Our own rules → `/var/ossec/yara/rules/yara_rules.yar` (installer downloads it) |
-| `update-yara-rules.sh` | Rules updater → `/usr/local/bin/`. Pulls our rules **plus [Neo23x0/signature-base](https://github.com/Neo23x0/signature-base)** (Florian Roth), drops files that don't compile with stock yara, and builds the master `/var/ossec/yara/rules/index.yar` that AR scans with. Weekly cron. |
+| `update-yara-rules.sh` | Rules updater → `/usr/local/bin/`. Pulls our rules **plus [Neo23x0/signature-base](https://github.com/Neo23x0/signature-base)** (Florian Roth), drops files that don't compile with stock yara, and builds the master `/var/ossec/yara/rules/index.yar` that AR scans with. Daily cron at 12:30 PM. |
 | `manager/local_decoder_yara.xml` | Append to **manager** `/var/ossec/etc/decoders/local_decoder.xml` |
 | `manager/local_rules_yara.xml` | Append to **manager** `/var/ossec/etc/rules/local_rules.xml` |
 | `manager/ossec-conf-ar-snippet.xml` | `<command>` + `<active-response>` blocks for **manager** `ossec.conf` |
@@ -48,7 +48,7 @@ sudo bash install.sh
 ```
 Rules come from two sources, merged into `/var/ossec/yara/rules/index.yar`:
 1. **Our rules** — `rule-collection/yara_rules.yar` in this repo. Push changes
-   to GitHub and the weekly cron rolls them out to all agents.
+   to GitHub and the daily 12:30 PM cron rolls them out to all agents.
 2. **signature-base** (Florian Roth / Neo23x0) — the industry-standard
    general detection set, pulled fresh from its GitHub master on every update.
 
@@ -79,7 +79,7 @@ AR snippet if they collide with existing custom rules.
   detect FIM events but nothing scans.
 - `extra_args` order matters: `yara.sh` reads index 1 (yara path) and index 3
   (rules file). Don't reorder.
-- After editing `yara_rules.yar` on agents, restart `wazuh-agent` (the weekly
+- After editing `yara_rules.yar` on agents, restart `wazuh-agent` (the daily
   update cron does this automatically, with a compile check first).
 - Quarantined files are `chmod 000` and auto-deleted after 30 days (daily cron).
 - The AR script skips files already inside the quarantine dir to avoid

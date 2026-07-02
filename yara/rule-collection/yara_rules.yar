@@ -1,6 +1,6 @@
 /*
     Wazuh YARA Active Response - Starter Rule Collection
-    Repo: github.com/yekyawhan/wazuh (git-home/yara)
+    Repo: github.com/minhtawlwe-svg/wazuh (git-home/yara)
     Author: Ye Kyaw Han, Hsu Sandy Thein
     Deployed to: /var/ossec/yara/rules/yara_rules.yar
 

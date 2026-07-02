@@ -17,7 +17,8 @@ TESTFILE="/tmp/yara-ar-test-$(date +%s).txt"
 
 echo "[*] Pre-check: yara binary and rules..."
 command -v yara >/dev/null || { echo "[-] yara not installed"; exit 1; }
-yara -w /var/ossec/yara/rules/yara_rules.yar /dev/null >/dev/null || { echo "[-] rules do not compile"; exit 1; }
+yara -w -d filename="" -d filepath="" -d extension="" -d filetype="" -d owner="" \
+    /var/ossec/yara/rules/index.yar /dev/null >/dev/null || { echo "[-] rules do not compile"; exit 1; }
 echo "[+] OK"
 
 echo "[*] Dropping EICAR test file: $TESTFILE"

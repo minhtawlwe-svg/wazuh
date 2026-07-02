@@ -10,7 +10,7 @@
   <command>
     <name>yara_linux</name>
     <executable>yara.sh</executable>
-    <extra_args>-yara_path /usr/local/bin -yara_rules /var/ossec/yara/rules/yara_rules.yar</extra_args>
+    <extra_args>-yara_path /usr/local/bin -yara_rules /var/ossec/yara/rules/index.yar</extra_args>
     <timeout_allowed>no</timeout_allowed>
   </command>
 

@@ -8,8 +8,9 @@
 
 set -e # Exit immediately if a command exits with a non-zero status
 
-# YARA rules are pulled from our GitHub repo (rule-collection/yara_rules.yar).
-RULES_URL="https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara/rule-collection/yara_rules.yar"
+# YARA rules are pulled from our GitHub repo (rule-collection/yara_rules.yar)
+# plus Florian Roth's signature-base, by the updater script below.
+REPO_RAW="https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara"
 
 # ==============================================================================
 # Setup Logging
@@ -54,14 +55,12 @@ else
     echo "[+] YARA is already installed. Skipping compilation."
 fi
 
-echo "[*] Downloading initial YARA rules from: $RULES_URL"
-RULES_DIR="/var/ossec/yara/rules"
-mkdir -p "$RULES_DIR"
-curl -fsSL "$RULES_URL" -o "$RULES_DIR/yara_rules.yar"
-
-echo "[*] Validating downloaded rules compile..."
-yara -w "$RULES_DIR/yara_rules.yar" /dev/null > /dev/null
-echo "[+] Rules compile OK."
+echo "[*] Installing rules updater (own rules + signature-base) and running initial update..."
+curl -fsSL "$REPO_RAW/update-yara-rules.sh" -o /usr/local/bin/update-yara-rules.sh
+chmod +x /usr/local/bin/update-yara-rules.sh
+/usr/local/bin/update-yara-rules.sh
+[ -f /var/ossec/yara/rules/index.yar ] || { echo "[-] index.yar was not built, aborting."; exit 1; }
+echo "[+] Rules installed: /var/ossec/yara/rules/index.yar"
 
 echo "[*] Creating Wazuh Active Response script (/var/ossec/active-response/bin/yara.sh)..."
 mkdir -p /var/ossec/active-response/bin/
@@ -104,7 +103,13 @@ esac
 
 # Execute Yara scan on the specified filename (Check if file still exists)
 if [ -f "${FILENAME}" ]; then
-  yara_output="$("${YARA_PATH}"/yara -w -r "$YARA_RULES" "$FILENAME")"
+  # -d defines external vars used by signature-base rules (THOR/Loki convention)
+  yara_output="$("${YARA_PATH}"/yara -w -r \
+      -d filename="$(basename "$FILENAME")" \
+      -d filepath="$FILENAME" \
+      -d extension="${FILENAME##*.}" \
+      -d filetype="" -d owner="" \
+      "$YARA_RULES" "$FILENAME")"
   if [[ $yara_output != "" ]]; then
     # Iterate every detected rule and append it to the LOG_FILE
     while read -r line; do
@@ -139,28 +144,7 @@ else
     echo "[+] FIM directories already configured."
 fi
 
-echo "[*] Setting up YARA rules auto-update script and Weekly Cronjob..."
-cat << EOF > /usr/local/bin/update-yara-rules.sh
-#!/bin/bash
-# Script to update YARA rules
-RULES_DIR="/var/ossec/yara/rules"
-mkdir -p "\$RULES_DIR"
-
-echo "[\$(date)] Updating YARA rules..." >> /var/log/yara-update.log
-
-if curl -fsSL "$RULES_URL" -o "\$RULES_DIR/yara_rules.yar.new" && yara -w "\$RULES_DIR/yara_rules.yar.new" /dev/null > /dev/null 2>&1; then
-    mv "\$RULES_DIR/yara_rules.yar.new" "\$RULES_DIR/yara_rules.yar"
-    echo "[\$(date)] Restarting Wazuh agent..." >> /var/log/yara-update.log
-    systemctl restart wazuh-agent
-    echo "[\$(date)] YARA rules updated and agent restarted successfully." >> /var/log/yara-update.log
-else
-    rm -f "\$RULES_DIR/yara_rules.yar.new"
-    echo "[\$(date)] ERROR: rules download or compile check failed; keeping old rules." >> /var/log/yara-update.log
-fi
-EOF
-
-chmod +x /usr/local/bin/update-yara-rules.sh
-
+echo "[*] Setting up Weekly rules-update Cronjob..."
 # Add cron job to update automatically at 11:30 PM every Sunday (Weekly)
 (crontab -l 2>/dev/null | grep -v "/usr/local/bin/update-yara-rules.sh" ; echo "30 23 * * 0 /usr/local/bin/update-yara-rules.sh") | crontab -
 

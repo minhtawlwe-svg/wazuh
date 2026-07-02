@@ -8,8 +8,8 @@
 
 set -e # Exit immediately if a command exits with a non-zero status
 
-# YARA rules are pulled from our GitHub repo (rule-collection/yara_rules.yar)
-# plus an upstream community signature collection, by the updater script below.
+# All YARA rules are pulled from our GitHub repo (yara/rule-collection/:
+# our own rules + vendored community signatures) by the updater script below.
 REPO_RAW="https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara"
 
 # ==============================================================================
@@ -144,8 +144,8 @@ else
     echo "[+] FIM directories already configured."
 fi
 
-echo "[*] Setting up Daily rules-update Cronjob (12:30 PM)..."
-(crontab -l 2>/dev/null | grep -v "/usr/local/bin/update-yara-rules.sh" ; echo "30 12 * * * /usr/local/bin/update-yara-rules.sh") | crontab -
+echo "[*] Setting up Daily rules-update Cronjob (1:15 PM)..."
+(crontab -l 2>/dev/null | grep -v "/usr/local/bin/update-yara-rules.sh" ; echo "15 13 * * * /usr/local/bin/update-yara-rules.sh") | crontab -
 
 # Add cron job to clean up quarantine directory (files older than 30 days) daily at 1:00 AM
 (crontab -l 2>/dev/null | grep -v "/var/ossec/active-response/quarantine" ; echo "0 1 * * * find /var/ossec/active-response/quarantine -type f -mtime +30 -delete") | crontab -

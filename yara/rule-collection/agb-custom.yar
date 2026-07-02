@@ -1,8 +1,8 @@
 /*
-    Wazuh YARA Active Response - Starter Rule Collection
+    AGB custom YARA rules
     Repo: github.com/minhtawlwe-svg/wazuh (git-home/yara)
     Author: Ye Kyaw Han, Hsu Sandy Thein
-    Deployed to: /var/ossec/yara/rules/yara_rules.yar
+    Merged into /var/ossec/yara/rules/index.yar by update-yara-rules.sh
 
     Add your own rules below or replace this file entirely.
     After updating, restart the Wazuh agent so AR scans use the new rules.

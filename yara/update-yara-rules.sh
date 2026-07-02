@@ -12,6 +12,10 @@ set -u
 
 REPO_TARBALL="https://github.com/minhtawlwe-svg/wazuh/archive/refs/heads/git-home.tar.gz"
 
+# Valhalla (Nextron) rule feed. Replace VALHALLA_APIKEY with your real key;
+# "demo" only returns a small sample set. Set VALHALLA_APIKEY="" to skip.
+VALHALLA_APIKEY="${VALHALLA_APIKEY:-1111111111111111111111111111111111111111111111111111111111111111}"
+
 RULES_DIR="/var/ossec/yara/rules"
 INDEX="$RULES_DIR/index.yar"
 LOG="/var/log/yara-update.log"
@@ -35,6 +39,24 @@ SRC=$(find "$TMP" -maxdepth 3 -type d -path "*/yara/rule-collection" | head -1)
 if [ -z "$SRC" ]; then
     log "ERROR: rule-collection not found in repo tarball; keeping previous rules."
     exit 1
+fi
+
+# Pull Valhalla feed into the collection so it is staged/compiled like the rest.
+# On failure we keep going with the repo rules only (never abort the update).
+if [ -n "$VALHALLA_APIKEY" ]; then
+    if curl -fsSL 'https://valhalla.nextron-systems.com/api/v1/get' \
+        -H 'Accept: text/plain' \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        -H 'Referer: https://valhalla.nextron-systems.com/' \
+        --compressed \
+        --data "demo=demo&apikey=${VALHALLA_APIKEY}&format=text" \
+        -o "$SRC/valhalla.yar" \
+       && yara -w "${EXTVARS[@]}" "$SRC/valhalla.yar" /dev/null >/dev/null 2>&1; then
+        log "Valhalla feed downloaded and compiles OK."
+    else
+        rm -f "$SRC/valhalla.yar"
+        log "WARN: Valhalla download failed or did not compile; skipping it this run."
+    fi
 fi
 
 # Stage: keep only files that compile individually

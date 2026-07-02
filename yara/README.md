@@ -13,7 +13,7 @@ Manager rules 100300/100301 (syscheck 550/554)
         │  Active Response: yara_linux (location: local)
         ▼
 Agent runs /var/ossec/active-response/bin/yara.sh
-        │  yara -w -r yara_rules.yar <file>
+        │  yara -w -r index.yar <file>
         ▼
 Match → active-responses.log → decoders → rules 108001 (level 12, match)
                                           108002 (level 10, quarantined)
@@ -25,9 +25,9 @@ File moved to /var/ossec/active-response/quarantine/ (chmod 000)
 | File | Where it goes |
 |---|---|
 | `install.sh` | Run on each Linux **agent** (root). Installs YARA 4.5.5, rules, AR script, FIM config, daily rules-update cron (1:15 PM), quarantine-cleanup cron. |
-| `rule-collection/yara_rules.yar` | Our own rules |
+| `rule-collection/agb-custom.yar` | Our own AGB rules |
 | `rule-collection/signature-base/` | Vendored community signature collection (742 files, compile-verified) |
-| `update-yara-rules.sh` | Rules updater → `/usr/local/bin/`. Pulls the whole `rule-collection/` from this repo, drops any file that doesn't compile, and builds the master `/var/ossec/yara/rules/index.yar` that AR scans with. Daily cron at 1:15 PM. |
+| `update-yara-rules.sh` | Rules updater → `/usr/local/bin/`. Pulls the whole `rule-collection/` from this repo **plus the Valhalla feed**, drops any file that doesn't compile, and builds the master `/var/ossec/yara/rules/index.yar` that AR scans with. Daily cron at 1:15 PM. |
 | `refresh-signature-base.sh` | Maintenance helper — re-vendors the latest upstream community rules into `rule-collection/signature-base/` (run in a Linux container/VM with yara installed, then commit + push) |
 | `manager/local_decoder_yara.xml` | Append to **manager** `/var/ossec/etc/decoders/local_decoder.xml` |
 | `manager/local_rules_yara.xml` | Append to **manager** `/var/ossec/etc/rules/local_rules.xml` |
@@ -48,11 +48,12 @@ sudo systemctl restart wazuh-manager
 ```bash
 sudo bash install.sh
 ```
-All rules live in this repo under `rule-collection/` — our own
-`yara_rules.yar` plus the vendored community set in `signature-base/`.
-Push changes to GitHub and the daily 1:15 PM cron rolls them out to all
-agents, merged into `/var/ossec/yara/rules/index.yar`. To bring in the
-latest upstream community rules, run `refresh-signature-base.sh` and push.
+Rules come from three sources, merged into `/var/ossec/yara/rules/index.yar`:
+our own `rule-collection/agb-custom.yar`, the vendored community set in
+`rule-collection/signature-base/`, and the **Valhalla feed** downloaded live
+on each update. Push changes to GitHub and the daily 1:15 PM cron rolls them
+out to all agents. To refresh the vendored community set, run
+`refresh-signature-base.sh` and push.
 
 The community rules use external variables (`filename`, `filepath`,
 `extension`, `filetype`, `owner`); the AR script and all compile checks
@@ -81,8 +82,12 @@ AR snippet if they collide with existing custom rules.
   detect FIM events but nothing scans.
 - `extra_args` order matters: `yara.sh` reads index 1 (yara path) and index 3
   (rules file). Don't reorder.
-- After editing `yara_rules.yar` on agents, restart `wazuh-agent` (the daily 1:15 PM
-  update cron does this automatically, with a compile check first).
+- After editing `agb-custom.yar`, push to GitHub; the daily 1:15 PM update cron
+  pulls it, rebuilds `index.yar`, and restarts `wazuh-agent` (compile-checked).
+- **Valhalla**: set your real API key via `VALHALLA_APIKEY` in
+  `update-yara-rules.sh` (the committed value is the `demo` key = sample rules
+  only). If the feed is down or the key is empty, the update continues with the
+  repo rules only.
 - Quarantined files are `chmod 000` and auto-deleted after 30 days (daily cron).
 - The AR script skips files already inside the quarantine dir to avoid
   scan/quarantine loops.

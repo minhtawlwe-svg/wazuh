@@ -9,7 +9,7 @@
 set -e # Exit immediately if a command exits with a non-zero status
 
 # YARA rules are pulled from our GitHub repo (rule-collection/yara_rules.yar)
-# plus Florian Roth's signature-base, by the updater script below.
+# plus an upstream community signature collection, by the updater script below.
 REPO_RAW="https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara"
 
 # ==============================================================================

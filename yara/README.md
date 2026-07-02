@@ -26,7 +26,7 @@ File moved to /var/ossec/active-response/quarantine/ (chmod 000)
 |---|---|
 | `install.sh` | Run on each Linux **agent** (root). Installs YARA 4.5.5, rules, AR script, FIM config, daily rules-update cron (12:30 PM), quarantine-cleanup cron. |
 | `rule-collection/yara_rules.yar` | Our own rules → `/var/ossec/yara/rules/yara_rules.yar` (installer downloads it) |
-| `update-yara-rules.sh` | Rules updater → `/usr/local/bin/`. Pulls our rules **plus [Neo23x0/signature-base](https://github.com/Neo23x0/signature-base)** (Florian Roth), drops files that don't compile with stock yara, and builds the master `/var/ossec/yara/rules/index.yar` that AR scans with. Daily cron at 12:30 PM. |
+| `update-yara-rules.sh` | Rules updater → `/usr/local/bin/`. Pulls our rules plus an upstream community signature collection, drops files that don't compile with stock yara, and builds the master `/var/ossec/yara/rules/index.yar` that AR scans with. Daily cron at 12:30 PM. |
 | `manager/local_decoder_yara.xml` | Append to **manager** `/var/ossec/etc/decoders/local_decoder.xml` |
 | `manager/local_rules_yara.xml` | Append to **manager** `/var/ossec/etc/rules/local_rules.xml` |
 | `manager/ossec-conf-ar-snippet.xml` | `<command>` + `<active-response>` blocks for **manager** `ossec.conf` |
@@ -49,10 +49,10 @@ sudo bash install.sh
 Rules come from two sources, merged into `/var/ossec/yara/rules/index.yar`:
 1. **Our rules** — `rule-collection/yara_rules.yar` in this repo. Push changes
    to GitHub and the daily 12:30 PM cron rolls them out to all agents.
-2. **signature-base** (Florian Roth / Neo23x0) — the industry-standard
-   general detection set, pulled fresh from its GitHub master on every update.
+2. **Community signature collection** — an industry-standard general
+   detection set, pulled fresh on every update.
 
-signature-base rules use external variables (`filename`, `filepath`,
+The community rules use external variables (`filename`, `filepath`,
 `extension`, `filetype`, `owner`); the AR script and all compile checks
 define them with `-d`. Files that still fail with stock yara (THOR-only or
 module-dependent) are dropped automatically, and any file whose rule names

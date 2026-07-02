@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# YARA rules updater: our own rules + Florian Roth's signature-base
+# YARA rules updater: our own rules + upstream community signature collection
 # Installed to /usr/local/bin/update-yara-rules.sh by install.sh
 # Builds /var/ossec/yara/rules/index.yar which yara.sh scans with.
 #

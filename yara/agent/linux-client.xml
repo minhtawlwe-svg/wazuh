@@ -1,0 +1,184 @@
+<!--
+  Centralized Linux agent config (shared agent.conf group config), pushed from
+  the manager to Linux agents. This is the production linux-client.xml with the
+  YARA additions folded in.
+
+  What YARA needs on the AGENT side is ONLY realtime FIM on the directories
+  where malware lands, so a dropped file fires manager rule 108000 -> the
+  yara_linux Active Response. Those blocks are tagged "YARA:" in the syscheck
+  section below.
+
+  Everything else (the yara_linux command and active-response, and rules
+  108000-108003) lives on the MANAGER, not here - see yara/manager/*.xml.
+-->
+<agent_config os="Linux">
+    <global>
+      <jsonout_output>yes</jsonout_output>
+      <alerts_log>yes</alerts_log>
+      <logall>yes</logall>
+    </global>
+    <!-- Policy monitoring -->
+    <rootcheck>
+      <disabled>no</disabled>
+      <check_files>yes</check_files>
+      <check_trojans>yes</check_trojans>
+      <check_dev>yes</check_dev>
+      <check_sys>yes</check_sys>
+      <check_pids>yes</check_pids>
+      <check_ports>yes</check_ports>
+      <check_if>yes</check_if>
+      <!-- Frequency that rootcheck is executed - every 10mis -->
+      <frequency>300</frequency>
+      <rootkit_files>/var/ossec/etc/rootcheck/rootkit_files.txt</rootkit_files>
+      <rootkit_trojans>/var/ossec/etc/rootcheck/rootkit_trojans.txt</rootkit_trojans>
+      <skip_nfs>yes</skip_nfs>
+      <ignore>/var/lib/containerd</ignore>
+      <ignore>/var/lib/docker/overlay2</ignore>
+    </rootcheck>
+    <wodle name="cis-cat">
+      <disabled>yes</disabled>
+      <timeout>1800</timeout>
+      <interval>1d</interval>
+      <scan-on-start>yes</scan-on-start>
+      <java_path>wodles/java</java_path>
+      <ciscat_path>wodles/ciscat</ciscat_path>
+    </wodle>
+    <!-- Osquery integration -->
+    <wodle name="osquery">
+      <disabled>yes</disabled>
+      <run_daemon>yes</run_daemon>
+      <log_path>/var/log/osquery/osqueryd.results.log</log_path>
+      <config_path>/etc/osquery/osquery.conf</config_path>
+      <add_labels>yes</add_labels>
+    </wodle>
+    <!-- System inventory -->
+    <wodle name="syscollector">
+      <disabled>no</disabled>
+      <interval>1h</interval>
+      <scan_on_start>yes</scan_on_start>
+      <hardware>yes</hardware>
+      <os>yes</os>
+      <network>yes</network>
+      <packages>yes</packages>
+      <ports all="no">yes</ports>
+      <processes>yes</processes>
+      <!-- Database synchronization settings -->
+      <synchronization>
+        <max_eps>10</max_eps>
+      </synchronization>
+    </wodle>
+    <sca>
+      <enabled>yes</enabled>
+      <scan_on_start>yes</scan_on_start>
+      <interval>12h</interval>
+      <skip_nfs>yes</skip_nfs>
+    </sca>
+    <!-- File integrity monitoring -->
+    <syscheck>
+      <disabled>no</disabled>
+      <!-- Frequency that syscheck is executed default every 12 hours -->
+      <frequency>43200</frequency>
+      <scan_on_start>yes</scan_on_start>
+      <!-- Directories to check  (perform all possible verifications) -->
+      <directories check_all="yes" realtime="yes">/usr/bin,/usr/sbin</directories>
+      <directories check_all="yes" realtime="yes">/etc/shadow</directories>
+      <directories check_all="yes" realtime="yes">/etc/ssh/sshd_config</directories>
+
+      <!-- YARA: realtime FIM on the dirs where malware typically lands, so a
+           new/changed file fires manager rule 108000 -> yara_linux AR.
+           No check_all here (we only need the change event, not full hashing);
+           report_changes=no keeps it light. -->
+      <directories realtime="yes">/tmp,/media,/root</directories>
+      <directories realtime="yes" recursion_level="6">/home</directories>
+
+      <!-- Files/directories to ignore -->
+      <ignore>/etc/mtab</ignore>
+      <ignore>/etc/hosts.deny</ignore>
+      <ignore>/etc/mail/statistics</ignore>
+      <ignore>/etc/random-seed</ignore>
+      <ignore>/etc/random.seed</ignore>
+      <ignore>/etc/adjtime</ignore>
+      <ignore>/etc/httpd/logs</ignore>
+      <ignore>/etc/utmpx</ignore>
+      <ignore>/etc/wtmpx</ignore>
+      <ignore>/etc/cups/certs</ignore>
+      <ignore>/etc/dumpdates</ignore>
+      <ignore>/etc/svc/volatile</ignore>
+      <ignore>/var/ossec/queue/</ignore>
+      <!-- YARA: never let FIM re-trigger on our own quarantine store -->
+      <ignore>/var/ossec/active-response/quarantine</ignore>
+      <!-- File types to ignore -->
+      <ignore type="sregex">.log$|.swp$</ignore>
+      <!-- Check the file, but never compute the diff -->
+      <nodiff>/etc/ssl/private.key</nodiff>
+      <skip_nfs>yes</skip_nfs>
+      <skip_dev>yes</skip_dev>
+      <skip_proc>yes</skip_proc>
+      <skip_sys>yes</skip_sys>
+      <!-- Nice value for Syscheck process -->
+      <process_priority>10</process_priority>
+      <!-- Maximum output throughput -->
+      <max_eps>50</max_eps>
+      <!-- Database synchronization settings -->
+      <synchronization><enabled>yes</enabled>
+        <interval>5m</interval>
+        <max_eps>10</max_eps>
+      </synchronization>
+    </syscheck>
+    <!-- Log analysis -->
+    <localfile>
+      <log_format>command</log_format>
+      <command>df -P</command>
+      <alias>Hdd health . . . </alias>
+      <frequency>360</frequency>
+    </localfile>
+    <localfile>
+      <log_format>full_command</log_format>
+      <command>netstat -tulpn | sed 's/\([[:alnum:]]\+\)\\+[[:digit:]]\+\\+[[:digit:]]\+\\+\(.*\):\([[:digit:]]*\)\\+\([0-9\.\:\*]\+\).\+\\([[:digit:]]*\/[[:alnum:]\-]*\).*/\1 \2 == \3 == \4 \5/' | sort -k 4 -g | sed 's/ == \(.*\) ==/:\1/' | sed 1,2d</command>
+      <alias>netstat listening ports</alias>
+      <frequency>360</frequency>
+    </localfile>
+    <localfile>
+      <log_format>full_command</log_format>
+      <command>last -n 20</command>
+      <frequency>360</frequency>
+    </localfile>
+    <!-- Active response -->
+    <active-response>
+      <disabled>no</disabled>
+      <ca_store>etc/wpk_root.pem</ca_store>
+      <ca_verification>yes</ca_verification>
+    </active-response>
+    <!-- Choose between "plain", "json", or "plain,json" for the format of internal logs -->
+    <logging>
+      <log_format>plain</log_format>
+    </logging>
+    <localfile>
+      <log_format>journald</log_format>
+      <location>journald</location>
+    </localfile>
+    <localfile>
+      <log_format>syslog</log_format>
+      <location>/var/ossec/logs/active-responses.log</location>
+    </localfile>
+    <localfile>
+      <log_format>syslog</log_format>
+      <location>/var/log/dpkg.log</location>
+    </localfile>
+    <localfile>
+      <log_format>json</log_format>
+      <location>/var/log/suricata/eve.json</location>
+    </localfile>
+    <localfile>
+      <log_format>audit</log_format>
+      <location>/var/log/audit/audit.log</location>
+    </localfile>
+    <anti_tampering>
+      <package_uninstallation>yes</package_uninstallation>
+    </anti_tampering>
+    <!-- Logcollector for udev USB detected Logs -->
+    <localfile>
+      <log_format>json</log_format>
+      <location>/var/log/usb_detect.json</location>
+    </localfile>
+  </agent_config>

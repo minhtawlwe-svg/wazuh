@@ -3,34 +3,34 @@
   Append to /var/ossec/etc/rules/local_rules.xml on the Wazuh MANAGER,
   then: systemctl restart wazuh-manager
 
-  Rule IDs used: 100300-100301 (FIM triggers), 108000-108002 (YARA results).
-  Change them if they collide with existing custom rules on your manager.
+  Rule IDs (all in our reserved 108xxx YARA block; 100300/100301 are already
+  used in production, so they are NOT used here):
+    108000 - FIM trigger (file added/modified in a monitored dir) -> fires AR
+    108001 - YARA result grouping (decoded_as, level 0)
+    108002 - YARA positive match (level 12)
+    108003 - YARA file quarantined (level 10)
 -->
 
-<!-- FIM triggers: a file created or modified in a monitored directory
-     fires the yara_linux active response on the reporting agent. -->
+<!-- FIM trigger: a file created or modified in a monitored directory
+     fires the yara_linux active response on the reporting agent.
+     if_sid 550 = file modified, 554 = file added. -->
 <group name="syscheck,yara_trigger,">
-  <rule id="100300" level="7">
-    <if_sid>550</if_sid>
+  <rule id="108000" level="7">
+    <if_sid>550,554</if_sid>
     <field name="file">/tmp/|/media/|/home/|/root/</field>
-    <description>File modified in monitored directory - launching YARA scan.</description>
-  </rule>
-  <rule id="100301" level="7">
-    <if_sid>554</if_sid>
-    <field name="file">/tmp/|/media/|/home/|/root/</field>
-    <description>File added to monitored directory - launching YARA scan.</description>
+    <description>File added/modified in monitored directory - launching YARA scan.</description>
   </rule>
 </group>
 
 <!-- YARA scan results, read back from the agent's active-responses.log -->
 <group name="yara,">
-  <rule id="108000" level="0">
+  <rule id="108001" level="0">
     <decoded_as>yara_decoder</decoded_as>
     <description>YARA grouping rule.</description>
   </rule>
 
-  <rule id="108001" level="12">
-    <if_sid>108000</if_sid>
+  <rule id="108002" level="12">
+    <if_sid>108001</if_sid>
     <match>wazuh-yara: INFO - Scan result: </match>
     <description>YARA: file "$(yara_scanned_file)" matched rule $(yara_rule).</description>
     <mitre>
@@ -38,8 +38,8 @@
     </mitre>
   </rule>
 
-  <rule id="108002" level="10">
-    <if_sid>108000</if_sid>
+  <rule id="108003" level="10">
+    <if_sid>108001</if_sid>
     <match>wazuh-yara: ACTION - File quarantined: </match>
     <description>YARA: malicious file quarantined at $(yara_quarantined_file).</description>
   </rule>

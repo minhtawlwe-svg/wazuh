@@ -9,14 +9,14 @@ quarantined.
 File dropped in /tmp,/media,/root,/home
         │  FIM realtime (agent syscheck)
         ▼
-Manager rules 100300/100301 (syscheck 550/554)
+Manager rule 108000 (syscheck 550/554 in monitored dir)
         │  Active Response: yara_linux (location: local)
         ▼
 Agent runs /var/ossec/active-response/bin/yara.sh
         │  yara -w -r -C index.yarc <file>   (precompiled ruleset)
         ▼
-Match → active-responses.log → decoders → rules 108001 (level 12, match)
-                                          108002 (level 10, quarantined)
+Match → active-responses.log → decoders → rule 108002 (level 12, match)
+                                          rule 108003 (level 10, quarantined)
 File moved to /var/ossec/active-response/quarantine/ (chmod 000)
 ```
 
@@ -32,7 +32,7 @@ File moved to /var/ossec/active-response/quarantine/ (chmod 000)
 | `manager/local_decoder_yara.xml` | Append to **manager** `/var/ossec/etc/decoders/local_decoder.xml` |
 | `manager/local_rules_yara.xml` | Append to **manager** `/var/ossec/etc/rules/local_rules.xml` |
 | `manager/ossec-conf-ar-snippet.xml` | `<command>` + `<active-response>` blocks for **manager** `ossec.conf` |
-| `agent/ossec-conf-fim-snippet.xml` | Manual reference — installer adds FIM dirs automatically |
+| `agent/linux-client.xml` | Production centralized agent config with YARA realtime FIM folded in — push to the Linux agent group; then run install.sh with `YARA_FIM_LOCAL=no` |
 | `test-yara-ar.sh` | End-to-end test (EICAR drop in /tmp) — run on an agent |
 
 ## Install
@@ -75,10 +75,11 @@ Expect a level-12 alert `YARA: file ... matched rule EICAR_Test_File` in the
 dashboard and the file gone from /tmp into the quarantine dir.
 
 ## Rule IDs used
-- `100300` / `100301` — FIM trigger (file modified / added in monitored dir)
-- `108000` — YARA grouping (level 0)
-- `108001` — YARA positive match (level 12)
-- `108002` — file quarantined (level 10)
+All in our reserved 108xxx block (100300/100301 are already used in production):
+- `108000` — FIM trigger (file added/modified in monitored dir) → fires AR
+- `108001` — YARA result grouping (level 0)
+- `108002` — YARA positive match (level 12)
+- `108003` — file quarantined (level 10)
 
 Change these in `manager/local_rules_yara.xml` **and** the `<rules_id>` in the
 AR snippet if they collide with existing custom rules.

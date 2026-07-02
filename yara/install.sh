@@ -142,14 +142,22 @@ mkdir -p /var/ossec/active-response/quarantine
 chmod 750 /var/ossec/active-response/quarantine
 chown root:wazuh /var/ossec/active-response/quarantine
 
-echo "[*] Ensuring FIM realtime monitoring of /tmp,/media,/root in agent ossec.conf..."
+# Realtime FIM on the dirs where malware lands, so a dropped file fires manager
+# rule 108000 -> yara_linux AR. Skipped if FIM is managed centrally via a shared
+# agent config (agent/linux-client.xml) - set YARA_FIM_LOCAL=no to skip.
+YARA_FIM_LOCAL="${YARA_FIM_LOCAL:-yes}"
 OSSEC_CONF="/var/ossec/etc/ossec.conf"
-if ! grep -q 'realtime="yes">/tmp,/media,/root' "$OSSEC_CONF"; then
-    cp "$OSSEC_CONF" "${OSSEC_CONF}.bak.$(date +%s)"
-    sed -i '0,\|</syscheck>|s||  <directories realtime="yes">/tmp,/media,/root</directories>\n</syscheck>|' "$OSSEC_CONF"
-    echo "[+] FIM directories added (backup of ossec.conf saved)."
+if [ "$YARA_FIM_LOCAL" = "yes" ]; then
+    echo "[*] Ensuring FIM realtime monitoring of /tmp,/media,/root in agent ossec.conf..."
+    if ! grep -q 'realtime="yes">/tmp,/media,/root' "$OSSEC_CONF"; then
+        cp "$OSSEC_CONF" "${OSSEC_CONF}.bak.$(date +%s)"
+        sed -i '0,\|</syscheck>|s||  <directories realtime="yes">/tmp,/media,/root</directories>\n</syscheck>|' "$OSSEC_CONF"
+        echo "[+] FIM directories added (backup of ossec.conf saved)."
+    else
+        echo "[+] FIM directories already configured."
+    fi
 else
-    echo "[+] FIM directories already configured."
+    echo "[*] YARA_FIM_LOCAL=no - skipping local FIM edit (managed centrally via linux-client.xml)."
 fi
 
 echo "[*] Setting up Daily rules-update Cronjob (1:15 PM)..."
@@ -162,4 +170,5 @@ echo "[*] Restarting Wazuh agent to apply FIM config..."
 systemctl restart wazuh-agent || echo "[-] wazuh-agent restart failed (is the agent installed?)"
 
 echo "[+] Local YARA installation, Active Response, Quarantine Cleanup and Auto-Update configured successfully!"
-echo "[!] REMINDER: apply yara/manager/*.xml on the Wazuh MANAGER (decoders, rules 100300/100301/108000-108002, and the yara_linux AR command) and restart wazuh-manager, or nothing will trigger."
+echo "[!] REMINDER: apply yara/manager/*.xml on the Wazuh MANAGER (decoders, rules 108000-108003, and the yara_linux AR command) and restart wazuh-manager, or nothing will trigger."
+echo "[!] If FIM is managed centrally, push agent/linux-client.xml to the group and run this installer with YARA_FIM_LOCAL=no."

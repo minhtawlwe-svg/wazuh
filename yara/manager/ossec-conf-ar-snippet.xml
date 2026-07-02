@@ -17,6 +17,6 @@
   <active-response>
     <command>yara_linux</command>
     <location>local</location>
-    <rules_id>100300,100301</rules_id>
+    <rules_id>108000</rules_id>
   </active-response>
 </ossec_config>

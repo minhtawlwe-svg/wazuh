@@ -9,7 +9,7 @@
   section below.
 
   Everything else (the yara_linux command and active-response, and rules
-  108000-108003) lives on the MANAGER, not here - see yara/manager/*.xml.
+  108000-108002) lives on the MANAGER, not here - see yara/manager/*.xml.
 -->
 <agent_config os="Linux">
     <global>

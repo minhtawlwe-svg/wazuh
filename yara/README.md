@@ -15,8 +15,8 @@ Manager rule 108000 (syscheck 550/554 in monitored dir)
 Agent runs /var/ossec/active-response/bin/yara.sh
         │  yara -w -r -C index.yarc <file>   (precompiled ruleset)
         ▼
-Match → active-responses.log → decoders → rule 108002 (level 12, match)
-                                          rule 108003 (level 10, quarantined)
+Match → active-responses.log → rule 108001 (level 12, match)
+                               rule 108002 (level 10, quarantined)
 File moved to /var/ossec/active-response/quarantine/ (chmod 000)
 ```
 
@@ -29,18 +29,18 @@ File moved to /var/ossec/active-response/quarantine/ (chmod 000)
 | `rule-collection/signature-base/` | Vendored community signature collection (742 files, compile-verified) |
 | `update-yara-rules.sh` | Rules updater → `/usr/local/bin/`. Pulls the whole `rule-collection/` from this repo **plus the Valhalla feed**, drops any file that doesn't compile, and builds the master `/var/ossec/yara/rules/index.yar` that AR scans with. Daily cron at 1:15 PM. |
 | `refresh-signature-base.sh` | Maintenance helper — re-vendors the latest upstream community rules into `rule-collection/signature-base/` (run in a Linux container/VM with yara installed, then commit + push) |
-| `manager/local_decoder_yara.xml` | Append to **manager** `/var/ossec/etc/decoders/local_decoder.xml` |
-| `manager/local_rules_yara.xml` | Append to **manager** `/var/ossec/etc/rules/local_rules.xml` |
+| `manager/local_rules_yara.xml` | Append to **manager** `/var/ossec/etc/rules/local_rules.xml` (self-contained — no separate decoder needed) |
 | `manager/ossec-conf-ar-snippet.xml` | `<command>` + `<active-response>` blocks for **manager** `ossec.conf` |
-| `agent/linux-client.xml` | Production centralized agent config with YARA realtime FIM folded in — push to the Linux agent group; then run install.sh with `YARA_FIM_LOCAL=no` |
+| `agent/linux-client.xml` | Production centralized agent config with YARA realtime FIM folded in — push to the Linux agent group (install.sh defaults to not touching local FIM) |
 | `test-yara-ar.sh` | End-to-end test (EICAR drop in /tmp) — run on an agent |
 
 ## Install
 
 **1. Manager (once):**
+- Append `manager/local_rules_yara.xml` to `/var/ossec/etc/rules/local_rules.xml`
+- Add the `<command>` + `<active-response>` blocks from
+  `manager/ossec-conf-ar-snippet.xml` into `/var/ossec/etc/ossec.conf`
 ```bash
-# append decoder + rules, add AR command/active-response blocks to ossec.conf
-sudo /var/ossec/bin/wazuh-logtest   # optional sanity
 sudo systemctl restart wazuh-manager
 ```
 
@@ -83,9 +83,8 @@ dashboard and the file gone from /tmp into the quarantine dir.
 ## Rule IDs used
 All in our reserved 108xxx block (100300/100301 are already used in production):
 - `108000` — FIM trigger (file added/modified in monitored dir) → fires AR
-- `108001` — YARA result grouping (level 0)
-- `108002` — YARA positive match (level 12)
-- `108003` — file quarantined (level 10)
+- `108001` — YARA positive match (level 12)
+- `108002` — file quarantined (level 10)
 
 Change these in `manager/local_rules_yara.xml` **and** the `<rules_id>` in the
 AR snippet if they collide with existing custom rules.

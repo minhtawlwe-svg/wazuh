@@ -171,5 +171,5 @@ echo "[*] Restarting Wazuh agent to apply FIM config..."
 systemctl restart wazuh-agent || echo "[-] wazuh-agent restart failed (is the agent installed?)"
 
 echo "[+] Local YARA installation, Active Response, Quarantine Cleanup and Auto-Update configured successfully!"
-echo "[!] REMINDER: apply yara/manager/*.xml on the Wazuh MANAGER (decoders, rules 108000-108003, and the yara_linux AR command) and restart wazuh-manager, or nothing will trigger."
+echo "[!] REMINDER: on the Wazuh MANAGER append manager/local_rules_yara.xml (rules 108000-108002) to local_rules.xml and add the yara_linux command/active-response from manager/ossec-conf-ar-snippet.xml, then restart wazuh-manager, or nothing will trigger."
 echo "[!] If FIM is managed centrally, push agent/linux-client.xml to the group and run this installer with YARA_FIM_LOCAL=no."

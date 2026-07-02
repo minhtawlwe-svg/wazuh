@@ -1,46 +1,63 @@
 <!--
-  YARA Active Response rules - MANAGER side
-  Append to /var/ossec/etc/rules/local_rules.xml on the Wazuh MANAGER,
-  then: systemctl restart wazuh-manager
+  ==== YARA Active Response rules  -  MANAGER side  (self-contained) ====
+  Append this whole block to:  /var/ossec/etc/rules/local_rules.xml
+  then:  sudo systemctl restart wazuh-manager
 
-  Rule IDs (all in our reserved 108xxx YARA block; 100300/100301 are already
-  used in production, so they are NOT used here):
-    108000 - FIM trigger (file added/modified in a monitored dir) -> fires AR
-    108001 - YARA result grouping (decoded_as, level 0)
-    108002 - YARA positive match (level 12)
-    108003 - YARA file quarantined (level 10)
+  This file is COMPLETE on its own - no separate decoder file is required.
+  The result rules match the raw "wazuh-yara:" lines that the agent writes to
+  active-responses.log (which the agent already tails and forwards).
+
+  Rule IDs - all inside our reserved 108xxx YARA block.
+  (100300 / 100301 are already used in production, so they are NOT used here.)
+      108000 - FIM trigger: file added/modified in a monitored dir -> fires AR
+      108001 - YARA match:   a monitored file matched a YARA rule   (level 12)
+      108002 - YARA action:  the matched file was quarantined       (level 10)
+
+  Pipeline:
+      file dropped in /tmp,/media,/root,/home
+        -> syscheck 550 (modified) / 554 (added)
+        -> rule 108000 (this file)  -> Active Response "yara_linux"
+        -> agent scans with YARA, writes result to active-responses.log
+        -> rule 108001 (match) and/or 108002 (quarantined) fire here
+  ============================================================================
 -->
 
-<!-- FIM trigger: a file created or modified in a monitored directory
-     fires the yara_linux active response on the reporting agent.
-     if_sid 550 = file modified, 554 = file added. -->
+<!-- 1) FIM TRIGGER
+     Fires the yara_linux Active Response when a file is created or modified
+     in a directory we care about. if_sid 550 = modified, 554 = added.
+     The active-response in ossec.conf references rule id 108000. -->
 <group name="syscheck,yara_trigger,">
+
   <rule id="108000" level="7">
     <if_sid>550,554</if_sid>
     <field name="file">/tmp/|/media/|/home/|/root/</field>
-    <description>File added/modified in monitored directory - launching YARA scan.</description>
+    <description>File added/modified in a monitored directory - launching YARA scan.</description>
+    <group>yara,</group>
   </rule>
+
 </group>
 
-<!-- YARA scan results, read back from the agent's active-responses.log -->
-<group name="yara,">
-  <rule id="108001" level="0">
-    <decoded_as>yara_decoder</decoded_as>
-    <description>YARA grouping rule.</description>
-  </rule>
+<!-- 2) YARA RESULTS
+     These match the lines the AR script appends to active-responses.log:
+       wazuh-yara: INFO - Scan result: RULENAME FILEPATH
+       wazuh-yara: ACTION - File quarantined: FILEPATH
+     No custom decoder needed - the full matched line is kept in full_log,
+     so the analyst sees which YARA rule hit and the file path. -->
+<group name="yara,malware,">
 
-  <rule id="108002" level="12">
-    <if_sid>108001</if_sid>
+  <rule id="108001" level="12">
     <match>wazuh-yara: INFO - Scan result: </match>
-    <description>YARA: file "$(yara_scanned_file)" matched rule $(yara_rule).</description>
+    <description>YARA: malicious file detected - see full log for the matched rule and file path.</description>
     <mitre>
       <id>T1204.002</id>
     </mitre>
+    <group>yara_match,pci_dss_10.6.1,pci_dss_11.4,gdpr_IV_35.7.d,</group>
   </rule>
 
-  <rule id="108003" level="10">
-    <if_sid>108001</if_sid>
+  <rule id="108002" level="10">
     <match>wazuh-yara: ACTION - File quarantined: </match>
-    <description>YARA: malicious file quarantined at $(yara_quarantined_file).</description>
+    <description>YARA: malicious file quarantined - see full log for the file path.</description>
+    <group>yara_quarantine,</group>
   </rule>
+
 </group>

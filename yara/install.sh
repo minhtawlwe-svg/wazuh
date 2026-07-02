@@ -103,13 +103,21 @@ esac
 
 # Execute Yara scan on the specified filename (Check if file still exists)
 if [ -f "${FILENAME}" ]; then
+  # Prefer the precompiled binary ruleset (-C) so we don't recompile every scan.
+  # Fall back to the text index if the .yarc isn't present yet.
+  COMPILED_RULES="${YARA_RULES%.yar}.yarc"
+  if [ -f "${COMPILED_RULES}" ]; then
+    RULES_ARG=(-C "${COMPILED_RULES}")
+  else
+    RULES_ARG=("${YARA_RULES}")
+  fi
   # -d defines external vars used by signature-base rules (THOR/Loki convention)
   yara_output="$("${YARA_PATH}"/yara -w -r \
       -d filename="$(basename "$FILENAME")" \
       -d filepath="$FILENAME" \
       -d extension="${FILENAME##*.}" \
       -d filetype="" -d owner="" \
-      "$YARA_RULES" "$FILENAME")"
+      "${RULES_ARG[@]}" "$FILENAME")"
   if [[ $yara_output != "" ]]; then
     # Iterate every detected rule and append it to the LOG_FILE
     while read -r line; do

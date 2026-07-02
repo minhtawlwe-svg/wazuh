@@ -119,6 +119,17 @@ else
     exit 1
 fi
 
+# Precompile to a single binary so yara.sh does NOT recompile 744 files on every
+# scan. yara.sh loads index.yarc with -C when present; text index.yar is fallback.
+COMPILED="$RULES_DIR/index.yarc"
+if command -v yarac >/dev/null 2>&1 && yarac "${EXTVARS[@]}" "$INDEX" "$COMPILED.new" 2>/dev/null; then
+    mv "$COMPILED.new" "$COMPILED"
+    log "index.yarc precompiled OK (scans use compiled ruleset)."
+else
+    rm -f "$COMPILED.new" "$COMPILED"
+    log "WARN: yarac precompile unavailable/failed; scans will use text index.yar."
+fi
+
 if systemctl is-active --quiet wazuh-agent; then
     systemctl restart wazuh-agent
     log "wazuh-agent restarted."

@@ -8,9 +8,8 @@
 
 set -e # Exit immediately if a command exits with a non-zero status
 
-# Where to pull yara_rules.yar from. Override before running if you host the
-# rules on a local server, e.g.:  RULES_URL="http://10.3.11.48/rules/yara_rules.yar" ./install.sh
-RULES_URL="${RULES_URL:-https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara/rule-collection/yara_rules.yar}"
+# YARA rules are pulled from our GitHub repo (rule-collection/yara_rules.yar).
+RULES_URL="https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara/rule-collection/yara_rules.yar"
 
 # ==============================================================================
 # Setup Logging

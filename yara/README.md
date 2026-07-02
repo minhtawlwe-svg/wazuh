@@ -44,9 +44,10 @@ sudo systemctl restart wazuh-manager
 **2. Each Linux agent:**
 ```bash
 sudo bash install.sh
-# or pull rules from a local server instead of GitHub:
-sudo RULES_URL="http://10.3.11.48/rules/yara_rules.yar" bash install.sh
 ```
+Rules are downloaded from this repo: `rule-collection/yara_rules.yar`. The
+weekly update cron re-pulls the same URL, so pushing new rules to GitHub
+rolls them out to all agents automatically.
 
 **3. Test:**
 ```bash

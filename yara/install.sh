@@ -143,9 +143,10 @@ chmod 750 /var/ossec/active-response/quarantine
 chown root:wazuh /var/ossec/active-response/quarantine
 
 # Realtime FIM on the dirs where malware lands, so a dropped file fires manager
-# rule 108000 -> yara_linux AR. Skipped if FIM is managed centrally via a shared
-# agent config (agent/linux-client.xml) - set YARA_FIM_LOCAL=no to skip.
-YARA_FIM_LOCAL="${YARA_FIM_LOCAL:-yes}"
+# rule 108000 -> yara_linux AR. Default NO: FIM is managed centrally via the
+# shared agent config (agent/linux-client.xml). Run with YARA_FIM_LOCAL=yes to
+# have the installer edit this agent's local ossec.conf instead.
+YARA_FIM_LOCAL="${YARA_FIM_LOCAL:-no}"
 OSSEC_CONF="/var/ossec/etc/ossec.conf"
 if [ "$YARA_FIM_LOCAL" = "yes" ]; then
     echo "[*] Ensuring FIM realtime monitoring of /tmp,/media,/root in agent ossec.conf..."
@@ -157,7 +158,7 @@ if [ "$YARA_FIM_LOCAL" = "yes" ]; then
         echo "[+] FIM directories already configured."
     fi
 else
-    echo "[*] YARA_FIM_LOCAL=no - skipping local FIM edit (managed centrally via linux-client.xml)."
+    echo "[*] Skipping local FIM edit - managed centrally via linux-client.xml (run with YARA_FIM_LOCAL=yes to edit local ossec.conf)."
 fi
 
 echo "[*] Setting up Daily rules-update Cronjob (1:15 PM)..."

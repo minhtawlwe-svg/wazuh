@@ -48,6 +48,12 @@ sudo systemctl restart wazuh-manager
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara/install.sh)"
 ```
+This installs YARA, the rules updater/cron, the AR script and quarantine, and
+does **not** touch the agent's local `ossec.conf` — FIM is managed centrally by
+pushing `agent/linux-client.xml` to the Linux agent group. If instead you want
+this agent to configure FIM locally (standalone, no shared config), run with
+`YARA_FIM_LOCAL=yes`.
+
 Or review first, then run:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara/install.sh -o yara-install.sh

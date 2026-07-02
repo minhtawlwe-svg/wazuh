@@ -1,0 +1,20 @@
+<!--
+  YARA Active Response decoders - MANAGER side
+  Append to /var/ossec/etc/decoders/local_decoder.xml on the Wazuh MANAGER,
+  then: systemctl restart wazuh-manager
+-->
+<decoder name="yara_decoder">
+  <prematch>wazuh-yara:</prematch>
+</decoder>
+
+<decoder name="yara_decoder1">
+  <parent>yara_decoder</parent>
+  <regex>wazuh-yara: (\S+) - Scan result: (\S+) (\S+)</regex>
+  <order>log_type, yara_rule, yara_scanned_file</order>
+</decoder>
+
+<decoder name="yara_decoder2">
+  <parent>yara_decoder</parent>
+  <regex>wazuh-yara: (\S+) - File quarantined: (\S+)</regex>
+  <order>log_type, yara_quarantined_file</order>
+</decoder>

@@ -1,0 +1,22 @@
+<!--
+  YARA Active Response wiring - MANAGER side
+  Add inside <ossec_config> in /var/ossec/etc/ossec.conf on the Wazuh MANAGER,
+  then: systemctl restart wazuh-manager
+
+  extra_args positions matter: yara.sh reads extra_args[1] (yara path)
+  and extra_args[3] (rules file). Do not reorder.
+-->
+<ossec_config>
+  <command>
+    <name>yara_linux</name>
+    <executable>yara.sh</executable>
+    <extra_args>-yara_path /usr/local/bin -yara_rules /var/ossec/yara/rules/yara_rules.yar</extra_args>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
+  <active-response>
+    <command>yara_linux</command>
+    <location>local</location>
+    <rules_id>100300,100301</rules_id>
+  </active-response>
+</ossec_config>

@@ -1,0 +1,46 @@
+<!--
+  YARA Active Response rules - MANAGER side
+  Append to /var/ossec/etc/rules/local_rules.xml on the Wazuh MANAGER,
+  then: systemctl restart wazuh-manager
+
+  Rule IDs used: 100300-100301 (FIM triggers), 108000-108002 (YARA results).
+  Change them if they collide with existing custom rules on your manager.
+-->
+
+<!-- FIM triggers: a file created or modified in a monitored directory
+     fires the yara_linux active response on the reporting agent. -->
+<group name="syscheck,yara_trigger,">
+  <rule id="100300" level="7">
+    <if_sid>550</if_sid>
+    <field name="file">/tmp/|/media/|/home/|/root/</field>
+    <description>File modified in monitored directory - launching YARA scan.</description>
+  </rule>
+  <rule id="100301" level="7">
+    <if_sid>554</if_sid>
+    <field name="file">/tmp/|/media/|/home/|/root/</field>
+    <description>File added to monitored directory - launching YARA scan.</description>
+  </rule>
+</group>
+
+<!-- YARA scan results, read back from the agent's active-responses.log -->
+<group name="yara,">
+  <rule id="108000" level="0">
+    <decoded_as>yara_decoder</decoded_as>
+    <description>YARA grouping rule.</description>
+  </rule>
+
+  <rule id="108001" level="12">
+    <if_sid>108000</if_sid>
+    <match>wazuh-yara: INFO - Scan result: </match>
+    <description>YARA: file "$(yara_scanned_file)" matched rule $(yara_rule).</description>
+    <mitre>
+      <id>T1204.002</id>
+    </mitre>
+  </rule>
+
+  <rule id="108002" level="10">
+    <if_sid>108000</if_sid>
+    <match>wazuh-yara: ACTION - File quarantined: </match>
+    <description>YARA: malicious file quarantined at $(yara_quarantined_file).</description>
+  </rule>
+</group>

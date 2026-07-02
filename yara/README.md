@@ -44,9 +44,15 @@ sudo /var/ossec/bin/wazuh-logtest   # optional sanity
 sudo systemctl restart wazuh-manager
 ```
 
-**2. Each Linux agent:**
+**2. Each Linux agent — one-line install:**
 ```bash
-sudo bash install.sh
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara/install.sh)"
+```
+Or review first, then run:
+```bash
+curl -fsSL https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/yara/install.sh -o yara-install.sh
+less yara-install.sh
+sudo bash yara-install.sh
 ```
 Rules come from three sources, merged into `/var/ossec/yara/rules/index.yar`:
 our own `rule-collection/agb-custom.yar`, the vendored community set in

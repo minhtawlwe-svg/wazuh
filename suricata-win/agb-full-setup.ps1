@@ -295,9 +295,19 @@ if(Test-Path $Ossec){
             Copy-Item $Ossec "$Ossec.bak-eve-dedupe-$(Get-Date -Format yyyyMMddHHmmss)" -Force
             [IO.File]::WriteAllText($Ossec,$oc2clean,$utf8)
             Restart-Robust 'WazuhSvc'
-            Start-Sleep 3
+            # 3s wasn't enough here in practice - Wazuh can log one last
+            # transient "is duplicated" warning right at restart before its
+            # merged config fully re-syncs, even though the fix already
+            # took effect and the warning doesn't recur. Wait longer so a
+            # one-off startup blip doesn't get misreported as a persisting
+            # problem, then check the CURRENT last line of the log (not
+            # just whether "duplicated" ever matched anywhere in history)
+            # to see if it's actively still tailing cleanly right now.
+            Start-Sleep 12
             $stillDup = Select-String -Path $AgentLog -Pattern "eve\.json.*is duplicated" -ErrorAction SilentlyContinue | Select-Object -Last 1
-            if ($stillDup) { Warn "duplicate warning persists - check group config manually: agent_groups -s -i <id> on the manager" }
+            $lastEveLine = Select-String -Path $AgentLog -Pattern "eve\.json" -ErrorAction SilentlyContinue | Select-Object -Last 1
+            $stillBroken = $stillDup -and $lastEveLine -and ($stillDup.LineNumber -eq $lastEveLine.LineNumber)
+            if ($stillBroken) { Warn "duplicate warning persists - check group config manually: agent_groups -s -i <id> on the manager" }
             else { Log "duplicate resolved - eve.json now sourced from the group config only" }
         }
     } else {

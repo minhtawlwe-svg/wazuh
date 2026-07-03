@@ -195,25 +195,17 @@
 -->
 <group name="c2_ioc,custom,">
 
-  <!-- Suricata-side: any JSON event (flow/http/dns/alert) to a blocked dest IP.
-       c2_autokill group -> bound to Active Response (kill+block) in ossec.conf.
-       CONFIRMED list match only - heuristic rules are NEVER in this group. -->
-  <rule id="100311" level="13">
-    <if_sid>86600</if_sid>
-    <list field="dest_ip" lookup="address_match_key">etc/lists/blocked_ips</list>
-    <description>C2 IOC: traffic to known-bad IP $(dest_ip):$(dest_port)</description>
-    <mitre><id>T1071</id></mitre>
-    <group>c2_correlate,c2_autokill,</group>
-  </rule>
-
-  <!-- Suricata-side: any JSON event FROM a blocked IP (in case it initiates) -->
-  <rule id="100313" level="13">
-    <if_sid>86600</if_sid>
-    <list field="src_ip" lookup="address_match_key">etc/lists/blocked_ips</list>
-    <description>C2 IOC: traffic from known-bad IP $(src_ip):$(src_port)</description>
-    <mitre><id>T1071</id></mitre>
-    <group>c2_correlate,c2_autokill,</group>
-  </rule>
+  <!-- 100311/100313 (Suricata-side IP-list dest_ip/src_ip match) REMOVED
+       2026-07-03. agb-black.rules already has a signature for every
+       blocked IP (sid 1000100+, msg "AGB BLACKLIST: ..."), and rule
+       100316 below matches that signature text regardless of which
+       specific IP - so Suricata's own rule file is now the SINGLE source
+       of truth for C2 IOC IPs on the Suricata side. No coverage lost:
+       adding a new bad IP only requires editing agb-black.rules on
+       GitHub, nothing to sync into a blocked_ips CDB entry anymore.
+       (100974 below is KEPT - it's Sysmon-side host telemetry with no
+       agb-black.rules equivalent, catching traffic Suricata itself might
+       never see, e.g. loopback or tunneled connections.) -->
 
   <!-- Sysmon-side (host telemetry): catches it even if Suricata never sees
        the packet (loopback, VPN-tunneled, or Suricata not deployed there).

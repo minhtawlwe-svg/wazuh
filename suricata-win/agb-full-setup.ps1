@@ -253,7 +253,7 @@ if($WazuhManager -and (Test-Path $Ossec)){
     }
 }
 
-# ---------- 8. Wazuh eve.json <localfile> ----------
+# ---------- 8. Wazuh eve.json <localfile> (self-healing against group duplicates) ----------
 if(Test-Path $Ossec){
     $oc = Get-Content $Ossec -Raw; $o0=$oc
     $oc = [regex]::Replace($oc,"(?is)[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*","`r`n")
@@ -263,9 +263,31 @@ if(Test-Path $Ossec){
     if($oc -ne $o0){ Copy-Item $Ossec "$Ossec.bak-eve-$(Get-Date -Format yyyyMMddHHmmss)" -Force; [IO.File]::WriteAllText($Ossec,$oc,$utf8) }
     Restart-Robust 'WazuhSvc'
     Log "eve.json bound to Wazuh agent + agent restarted"
-    Write-Host "[i] If this agent belongs to a manager GROUP that ALSO defines eve.json, you'll get" -ForegroundColor Yellow
-    Write-Host "    'Log file ... is duplicated' warnings and unpredictable shipping. Check with" -ForegroundColor Yellow
-    Write-Host "    agent_groups -s -i <id> on the manager and keep only ONE definition." -ForegroundColor Yellow
+
+    # Self-heal: if this agent is ALSO in a manager GROUP that defines eve.json
+    # (common setup), Wazuh logs "Log file ... is duplicated" and Suricata data
+    # can silently fail to ship - hit this for real 2026-07-03 (see
+    # project_c2_detection_engineering memory). Detect it and remove the LOCAL
+    # definition we just added, relying on the group's copy instead - one
+    # source of truth, no manual cleanup needed.
+    Start-Sleep 3
+    $dup = Select-String -Path $AgentLog -Pattern "eve\.json.*is duplicated" -ErrorAction SilentlyContinue | Select-Object -Last 1
+    if ($dup) {
+        Warn "duplicate eve.json localfile detected (this agent's manager GROUP already defines it) - removing the LOCAL copy just added, relying on the group config instead"
+        $oc2 = Get-Content $Ossec -Raw
+        $oc2clean = [regex]::Replace($oc2,"(?is)[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*","`r`n")
+        if ($oc2clean -ne $oc2) {
+            Copy-Item $Ossec "$Ossec.bak-eve-dedupe-$(Get-Date -Format yyyyMMddHHmmss)" -Force
+            [IO.File]::WriteAllText($Ossec,$oc2clean,$utf8)
+            Restart-Robust 'WazuhSvc'
+            Start-Sleep 3
+            $stillDup = Select-String -Path $AgentLog -Pattern "eve\.json.*is duplicated" -ErrorAction SilentlyContinue | Select-Object -Last 1
+            if ($stillDup) { Warn "duplicate warning persists - check group config manually: agent_groups -s -i <id> on the manager" }
+            else { Log "duplicate resolved - eve.json now sourced from the group config only" }
+        }
+    } else {
+        Log "no duplicate eve.json warning - single clean binding confirmed"
+    }
 } else { Warn "no Wazuh agent (ossec.conf) on this machine - Suricata runs as local IDS only" }
 
 Write-Host "`n===== STEP 2/4: AGB daily rule auto-deploy (scheduled task) =====" -ForegroundColor Green

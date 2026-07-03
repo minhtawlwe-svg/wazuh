@@ -50,7 +50,13 @@ $u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
 ```
-Installs Suricata (unattended), then downloads `agb-white.rules`/`agb-black.rules` and registers a daily **1:30 PM** scheduled task that keeps them in sync with GitHub. See [AGB whitelist/blacklist auto-deploy](#agb-whitelistblacklist-auto-deploy) below.
+**Interactive by default** — prompts for capture interface and HOME_NET (press Enter on either to auto-pick/keep the stock default). Then downloads `agb-white.rules`/`agb-black.rules` and registers a daily **1:30 PM** scheduled task that keeps them in sync with GitHub. See [AGB whitelist/blacklist auto-deploy](#agb-whitelistblacklist-auto-deploy) below.
+
+To pre-supply exact values non-interactively (piping via `| iex` can't pass parameters — download first):
+```powershell
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
+```
+Or skip both prompts and auto-pick everything: add `-NoPrompt` instead.
 
 **Test alerts on demand:**
 ```powershell

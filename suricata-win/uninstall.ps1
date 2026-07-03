@@ -66,12 +66,29 @@ foreach($d in $dirs){ if (Test-Path -LiteralPath $d){
 }}
 
 # 6. eve.json localfile out of ossec.conf -----------------------------
+# NOTE: this only cleans the LOCAL ossec.conf. If this agent is a member
+# of a Wazuh manager GROUP that also defines an eve.json <localfile> in
+# its shared agent.conf (common setup - check with, on the manager:
+# `agent_groups -s -i <id>`), that group config will silently push the
+# SAME eve.json binding right back the next time the agent reconnects,
+# and having it in BOTH places causes Wazuh to log "Log file ... is
+# duplicated" and can result in unpredictable/broken log shipping (hit
+# this for real on 2026-07-03 - see project_c2_detection_engineering
+# memory). This uninstaller CANNOT fix that half - it has no access to
+# the manager. If you saw eve.json get removed here but Suricata data
+# still isn't shipping (or duplicate warnings still appear) after a
+# reinstall, remove the agent from that group on the manager too:
+#   sudo /var/ossec/bin/agent_groups -r -i <agent_id> -g <group_name>
 $conf = @('C:\Program Files (x86)\ossec-agent\ossec.conf','C:\Program Files\ossec-agent\ossec.conf') | Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($conf){
     $c = Get-Content -LiteralPath $conf -Raw
     $n = [regex]::Replace($c,"(?is)[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*","`r`n")
     if ($n -ne $c){ Act "strip eve.json <localfile> from ossec.conf + restart WazuhSvc"
         if(-not $WhatIfOnly){ Copy-Item $conf "$conf.bak-deepclean-$(Get-Date -Format yyyyMMddHHmmss)" -Force; [IO.File]::WriteAllText($conf,$n,(New-Object Text.UTF8Encoding($false))); Restart-Service WazuhSvc -EA SilentlyContinue }
+        Write-Host "[i] This only removed the LOCAL eve.json binding. If this agent belongs to a manager" -ForegroundColor Yellow
+        Write-Host "    GROUP that also defines eve.json (check: agent_groups -s -i <id> on the manager)," -ForegroundColor Yellow
+        Write-Host "    that shared config will push it right back on reconnect. Remove group membership" -ForegroundColor Yellow
+        Write-Host "    on the manager too if you want it TRULY gone." -ForegroundColor Yellow
     } else { Log "no eve.json localfile in ossec.conf" }
 }
 

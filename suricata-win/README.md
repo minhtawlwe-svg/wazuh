@@ -310,6 +310,7 @@ If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager t
 | `manager link: none` | agent reconnecting after restart | wait ~30 s and re-check |
 | `WazuhSvc cannot be stopped` | service stop race | installer force-stops/kills + restarts |
 | Npcap wizard pops up | free Npcap has no silent mode | tick *WinPcap API-compatible Mode*, finish |
+| `Log file '...eve.json' is duplicated`, Suricata data silently stops shipping to the manager (even though the agent shows Active and eve.json is growing locally) | eve.json `<localfile>` defined BOTH in this agent's local `ossec.conf` AND in a manager-side GROUP's shared `agent.conf` | check group membership on the manager: `agent_groups -s -i <id>`; if the agent is in a group that also defines eve.json, remove the LOCAL `<localfile>` block (regex in `uninstall.ps1`'s step 6, or manually) and keep only the group-managed one - having it in both places is unpredictable, not just noisy |
 
 ---
 

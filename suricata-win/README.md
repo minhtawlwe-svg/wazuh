@@ -24,6 +24,7 @@ No external installer dependency. Portable across any user account (machine-wide
 | [`install-agb-rules-task.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/install-agb-rules-task.ps1) | registers the daily 1:30 PM SYSTEM scheduled task that runs `deploy-agb-rules.ps1` |
 | [`uninstall-agb-rules.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall-agb-rules.ps1) | removes ONLY the AGB rules auto-deploy (task, scripts, rule files); leaves base Suricata untouched |
 | [`agb-full-uninstall.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-full-uninstall.ps1) | **one-line combined uninstaller**: removes AGB auto-deploy + deep-cleans base Suricata |
+| [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager) | **manager-side** files (see [Manager-side setup](#manager-side-setup) below) — deployed ONCE on the Wazuh manager, not per-agent |
 
 > **Run everything from an Administrator PowerShell** (Win+X → *Terminal (Admin)*). All scripts declare `#Requires -RunAsAdministrator`.
 
@@ -182,28 +183,45 @@ Start-ScheduledTask -TaskName 'Suricata Daily Update And Log Rotation'  # run no
 
 ## AGB whitelist/blacklist auto-deploy
 
-A layered Suricata whitelist (`agb-white.rules`) + blacklist (`agb-black.rules`) pair, kept in sync across the fleet from **GitHub as the single source of truth**. Each agent independently pulls and deploys — no central push, no shared credentials, scales to any number of machines.
+A layered Suricata whitelist (`agb-white.rules`) + blacklist (`agb-black.rules`) pair, kept in sync across the fleet from **GitHub as the single source of truth**. Each agent independently pulls and deploys — no central push, no shared credentials, scales to any number of machines. A confirmed blacklist hit triggers **auto-kill** (process kill + firewall block) via a Wazuh Active Response — see [Manager-side setup](#manager-side-setup) for that half.
 
 ```
 edit agb-white.rules / agb-black.rules on GitHub
         │
         ▼ (daily, 1:30 PM, per agent, SYSTEM-level scheduled task)
 deploy-agb-rules.ps1 pulls raw files → validates (suricata -T) → restarts Suricata only if changed
+        │
+        ▼ (agb-black.rules hit ships to the manager)
+Wazuh manager rule matches (100316 for agb-black.rules, or 100311/100313/100974/100314
+for the CDB blocklist) → tagged group "c2_autokill"
+        │
+        ▼
+Active Response fires on the agent → agb-kill-block.ps1 kills the process (if a PID is
+available, e.g. Sysmon-sourced rule 100974) + blocks the IP via netsh firewall
 ```
+
+**IMPORTANT — what alerts vs. what auto-kills:**
+| | Behavior |
+| --- | --- |
+| **Whitelist match** (`agb-white.rules`, or manager `allowed_ips`/`allowed_domains`) | Silent, no alert |
+| **Confirmed blacklist match** (`agb-black.rules`, or manager `blocked_ips`/`blocked_domains`) | **Auto-kill**: process killed (if PID known) + IP blocked via firewall |
+| **Heuristic/behavioral match** (encoded PowerShell, interpreter→external-IP, reverse-shell command patterns) | **Alert only** — for human review; promote the IP/domain to the blacklist once confirmed, it will NOT auto-kill on its own |
+| **No match on any list or pattern** | Silent |
 
 **`agb-white.rules`** — Suricata `pass` rules, evaluated before `alert` rules, so matches are silently allowed. Currently allows the AGB dynamic-DNS hosts (`agb*.mywire.org`) so they never trip `ET DYN_DNS` noise (sid 2045987 / Wazuh rule 86601).
 
-**`agb-black.rules`** — explicit `alert` rules for known-bad IPs/domains. Sensor-level defense-in-depth alongside manager-side Wazuh CDB IOC rules (`100311`/`100313`/`100974` for IPs, `100314` for domains) — even if `eve.json` shipping to the manager ever breaks, these still alert locally in `fast.log`/`eve.json`. sid range `1000100+` reserved for this file.
+**`agb-black.rules`** — explicit `alert` rules for known-bad IPs/domains. Sensor-level defense-in-depth alongside manager-side Wazuh CDB IOC rules (`100311`/`100313`/`100974` for IPs, `100314` for domains) — even if `eve.json` shipping to the manager ever breaks, these still alert locally in `fast.log`/`eve.json`. sid range `1000100+` reserved for this file. **Note: Suricata itself only detects — it cannot kill/block. That enforcement happens on the manager side, see below.**
 
 ### Add an agent to the fleet
-Run the combined one-liner (installs Suricata **and** sets up the auto-deploy):
+Run the combined one-liner — installs Suricata, sets up the auto-deploy, **and** deploys the Active Response scripts (3 steps, one command):
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
 ```
-Or, if Suricata is already installed on that agent, just add the auto-deploy task:
+Or, if Suricata is already installed on that agent, just add the auto-deploy task + AR scripts:
 ```powershell
 iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/install-agb-rules-task.ps1 -UseBasicParsing | iex
 ```
+An agent running this one-liner is only **half** the setup — the manager also needs the rules + Active Response binding configured once (see [Manager-side setup](#manager-side-setup)).
 
 ### Change the rules
 Edit `agb-white.rules` / `agb-black.rules` directly on GitHub (web UI or a local clone + push). Every agent running the scheduled task picks up the change at its next 1:30 PM run — no redeploy step needed anywhere else.
@@ -219,6 +237,12 @@ Get-Content "C:\ProgramData\Suricata\rules\agb-deploy.log" -Tail 20
 & "C:\ProgramData\Suricata\agb-scripts\deploy-agb-rules.ps1"
 ```
 
+### Check the Active Response log (did it kill/block anything?)
+```powershell
+Get-Content "C:\Program Files (x86)\ossec-agent\active-response\agb-kill-block.log" -Tail 20
+Get-NetFirewallRule -DisplayName "AGB-BLOCK-*" | Select DisplayName, Enabled, Action
+```
+
 ### Remove an agent from the fleet
 ```powershell
 # AGB rules auto-deploy only, keep Suricata itself:
@@ -227,6 +251,49 @@ iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win
 # Everything (AGB auto-deploy + base Suricata deep-clean):
 iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
 ```
+Neither of these removes the manager-side rules/AR binding — that's a separate, one-time manager change (see below).
+
+---
+
+## Manager-side setup
+
+The agent one-liners above only cover the Suricata sensor. The Wazuh **manager** needs a one-time setup to (a) actually watch for blacklist hits shipped in from every agent, (b) correlate them, and (c) trigger the Active Response that does the kill+block. Files live in [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager):
+
+| File | Deploys to (on the manager) |
+| --- | --- |
+| `local_rules_c2.xml` | `/var/ossec/etc/rules/local_rules_c2.xml` |
+| `blocked_ips`, `interpreter_dest_allowlist`, `blocked_domains`, `allowed_domains` | `/var/ossec/etc/lists/` (each) |
+| `active-response/agb-kill-block.ps1` + `.cmd` | copied by each **agent's** `agb-full-setup.ps1`/`install-agb-rules-task.ps1` into its own `active-response\bin\` — NOT deployed on the manager itself |
+
+**One-time manager setup** (Docker example — adjust container name for your setup):
+```powershell
+docker cp local_rules_c2.xml            <manager-container>:/var/ossec/etc/rules/local_rules_c2.xml
+docker cp blocked_ips                    <manager-container>:/var/ossec/etc/lists/blocked_ips
+docker cp interpreter_dest_allowlist      <manager-container>:/var/ossec/etc/lists/interpreter_dest_allowlist
+docker cp blocked_domains                <manager-container>:/var/ossec/etc/lists/blocked_domains
+docker cp allowed_domains                <manager-container>:/var/ossec/etc/lists/allowed_domains
+docker exec <manager-container> chown wazuh:wazuh /var/ossec/etc/rules/local_rules_c2.xml /var/ossec/etc/lists/blocked_ips /var/ossec/etc/lists/interpreter_dest_allowlist /var/ossec/etc/lists/blocked_domains /var/ossec/etc/lists/allowed_domains
+docker exec <manager-container> /var/ossec/bin/wazuh-analysisd -t
+```
+If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager to load everything. The 4 CDB lists must also be registered in `ossec.conf`'s `<ruleset>` block (one `<list>etc/lists/...</list>` line each) if this is a fresh manager that's never had them before.
+
+**Register the Active Response command + binding** in `ossec.conf` (once):
+```xml
+<command>
+  <name>agb-kill-block</name>
+  <executable>agb-kill-block.cmd</executable>
+  <timeout_allowed>no</timeout_allowed>
+</command>
+
+<active-response>
+  <command>agb-kill-block</command>
+  <location>local</location>
+  <rules_group>c2_autokill</rules_group>
+</active-response>
+```
+`location: local` means the AR runs on whichever agent generated the triggering alert — not centrally on the manager. `rules_group: c2_autokill` binds it to exactly the 4 confirmed-blacklist rules (100311, 100313, 100974, 100316) — heuristic rules are deliberately never in this group, so they can never auto-kill.
+
+**⚠️ Test before trusting it.** Run a beacon test against an IP already in `blocked_ips` (e.g. a lab/test C2), then check the agent's `agb-kill-block.log` and `Get-NetFirewallRule -DisplayName "AGB-BLOCK-*"` to confirm it actually killed the process and blocked the IP before relying on this in a real incident.
 
 ---
 

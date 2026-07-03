@@ -14,7 +14,10 @@
 # Order matters: suricata-install.ps1 (re)writes suricata.yaml's rule-files
 # to just the base merged ruleset, so it must run FIRST. The agb rules
 # installer then appends agb-white.rules/agb-black.rules and registers the
-# daily 1:30 PM pull-deploy task.
+# daily 1:30 PM pull-deploy task. Step 3 deploys the auto-kill Active
+# Response script into the Wazuh agent's active-response\bin - the manager
+# itself (rules + AR command/binding in ossec.conf) is configured
+# separately, once, on the manager (see suricata-win/wazuh-manager/).
 # ============================================================================
 param(
     [switch]$NoPrompt,
@@ -60,5 +63,24 @@ if (-not (Get-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" -ErrorAction S
     }
 }
 
+Write-Host "`n===== STEP 3/3: Active Response (auto-kill on confirmed blacklist hit) =====" -ForegroundColor Cyan
+$ArBase = "$Base/wazuh-manager/active-response"
+$AgentArBin = "C:\Program Files (x86)\ossec-agent\active-response\bin"
+if (Test-Path $AgentArBin) {
+    try {
+        Invoke-WebRequest -Uri "$ArBase/agb-kill-block.ps1" -OutFile "$AgentArBin\agb-kill-block.ps1" -UseBasicParsing
+        Invoke-WebRequest -Uri "$ArBase/agb-kill-block.cmd" -OutFile "$AgentArBin\agb-kill-block.cmd" -UseBasicParsing
+        Write-Host "[+] agb-kill-block.ps1/.cmd deployed to $AgentArBin"
+        Write-Host "[i] No agent restart needed - execd looks up the script by name at invocation time."
+        Write-Host "[i] Manager-side (rules 100311/100313/100974/100316 + command/active-response binding in" -ForegroundColor DarkGray
+        Write-Host "    ossec.conf) must still be configured ONCE on the manager - see suricata-win/wazuh-manager/" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "[!] Failed to deploy AR scripts: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[!] Wazuh agent not found at $AgentArBin - skipping AR deployment (install/enroll the Wazuh agent first)" -ForegroundColor Yellow
+}
+
 Write-Host "`n===== AGB full setup complete =====" -ForegroundColor Green
 Write-Host "Suricata installed + agb-white.rules/agb-black.rules deploying daily at 1:30 PM from GitHub."
+Write-Host "Active Response scripts deployed (enforcement active once the manager-side rules/binding are configured)."

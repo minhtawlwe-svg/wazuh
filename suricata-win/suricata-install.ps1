@@ -188,8 +188,34 @@ if($rf -ge 0){
     $ylines = @($ylines[0..$rf]) + @('  - suricata.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
     $y = $ylines -join "`r`n"
 }
+# disable eve-log 'stats' output (FIX 3, added 2026-07-03). Suricata's
+# periodic stats record has HUNDREDS of nested numeric fields
+# (decoder.*, tcp.*, app_layer.*, flow.*, etc.) - once flattened by
+# Wazuh's generic JSON decoder this exceeds analysisd's hard field-count
+# limit ("ERROR: Too many fields for JSON decoder"), which silently
+# drops the event with NO indication to the agent - the agent shows
+# "Analyzing file: eve.json" with zero errors, eve.json grows correctly
+# locally, the agent stays Active, but ZERO Suricata data EVER reaches
+# the manager as a decoded json event. Confirmed root cause on a real
+# manager 2026-07-03 (see project_c2_detection_engineering memory) after
+# an entire day of debugging what looked like a config/shipping/network
+# problem - it was purely this. Disabling stats (a low-value output for
+# SOC purposes anyway) fixes it; alert/flow/dns/http events have far
+# fewer fields and decode fine.
+$ylines = $y -split "`r?`n"
+$si=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^(\s*)-\s*stats:\s*$'){ $si=$i; break } }
+if($si -ge 0){
+    $indent = ($ylines[$si] -replace '-.*$','').Length
+    $j=$si+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s+\S' -and (($ylines[$j] -replace '^(\s*).*$','$1').Length) -gt $indent){ $j++ }
+    $pad = ' ' * ($indent + 4)
+    $ylines = @($ylines[0..$si]) + @("$pad" + 'enabled: no') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+    $y = $ylines -join "`r`n"
+    Log "eve-log stats output disabled (prevents 'Too many fields for JSON decoder' on the manager)"
+} else {
+    Log "no eve-log 'stats' block found - skipping (may already be disabled or absent in this Suricata version)"
+}
 [IO.File]::WriteAllText($Yaml, $y, $utf8)
-Log "suricata.yaml configured (log-dir, rule-path, rule-files=suricata.rules)"
+Log "suricata.yaml configured (log-dir, rule-path, rule-files=suricata.rules, stats disabled)"
 # validate quietly with QUOTED path (FIX 2). file.magic warnings are expected on Windows (no libmagic).
 try { $tout = (& $Exe -T -c $Yaml 2>&1 | Out-String) } catch { $tout = "$_" }
 $tline = ($tout -split "`n" | Where-Object { $_ -match 'successfully loaded|no rules were loaded' } | Select-Object -First 1)

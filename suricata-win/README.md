@@ -1,9 +1,13 @@
 # suricata-win
 
-Self-contained **Suricata IDS → Wazuh** deployment for Windows. One PowerShell script installs Npcap, Suricata (8.x), the ET Open ruleset, the Windows service, the Wazuh agent binding, and a daily maintenance task — then verifies the whole pipeline.
+Self-contained **Suricata IDS → Wazuh** deployment for Windows, plus an AGB whitelist/blacklist layer with auto-kill Active Response. Two entry points: `agb-full-setup.ps1` installs everything, `agb-full-uninstall.ps1` removes everything.
 
 ```
 traffic → Suricata → eve.json → Wazuh agent → manager (rule 86601 "Suricata: Alert") → dashboard
+                                                      │
+                                       agb-black.rules hit / IOC match
+                                                      ▼
+                                     Active Response: kill process + block IP
 ```
 
 No external installer dependency. Portable across any user account (machine-wide paths only).
@@ -14,79 +18,50 @@ No external installer dependency. Portable across any user account (machine-wide
 
 | File | What it does |
 | --- | --- |
-| [`suricata-install.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/suricata-install.ps1) | installer + configurator + verifier |
-| [`Test-SuricataAlerts.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/Test-SuricataAlerts.ps1) | on-demand alert test (injects WAZUH-TEST rules, fires traffic, confirms) |
-| [`uninstall.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall.ps1) | deep clean (service, MSI, configs, rules, eve.json, task, Defender/firewall rules) |
-| [`agb-full-setup.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-full-setup.ps1) | **one-line combined installer**: base Suricata install + AGB whitelist/blacklist auto-deploy |
+| [`agb-full-setup.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-full-setup.ps1) | **the installer** — self-contained: Npcap, Suricata, ET Open ruleset, agb-white/agb-black rules, daily auto-deploy task, Active Response scripts, eve-log stats fix, all in one file |
+| [`agb-full-uninstall.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-full-uninstall.ps1) | **the uninstaller** — self-contained deep-clean of everything the installer put in place |
 | [`agb-white.rules`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-white.rules) | Suricata `pass` rules (known-good domains/IPs) — **edit this on GitHub to change the whitelist** |
 | [`agb-black.rules`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-black.rules) | Suricata `alert` rules (known-bad C2 IPs/domains) — **edit this on GitHub to change the blacklist** |
-| [`deploy-agb-rules.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/deploy-agb-rules.ps1) | pull-deploy logic: downloads the two rules above from GitHub, validates, restarts Suricata only if changed |
-| [`install-agb-rules-task.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/install-agb-rules-task.ps1) | registers the daily 1:30 PM SYSTEM scheduled task that runs `deploy-agb-rules.ps1` |
-| [`uninstall-agb-rules.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall-agb-rules.ps1) | removes ONLY the AGB rules auto-deploy (task, scripts, rule files); leaves base Suricata untouched |
-| [`agb-full-uninstall.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-full-uninstall.ps1) | **one-line combined uninstaller**: removes AGB auto-deploy + deep-cleans base Suricata |
+| [`deploy-agb-rules.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/deploy-agb-rules.ps1) | pull-deploy logic invoked by the daily scheduled task: downloads the two rules above from GitHub, validates, restarts Suricata only if changed — kept as its own file because the task calls it repeatedly, not a one-time install step |
+| [`fix-eve-stats-overflow.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/fix-eve-stats-overflow.ps1) | standalone fix for agents installed **before** this bug was found: disables eve-log `stats` output, which silently blocks ALL Suricata data from ever reaching the manager (see Troubleshooting). Already baked into `agb-full-setup.ps1` for new installs — only needed as a patch for existing installs |
+| [`Test-SuricataAlerts.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/Test-SuricataAlerts.ps1) | on-demand alert test (injects WAZUH-TEST rules, fires traffic, confirms) |
 | [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager) | **manager-side** files (see [Manager-side setup](#manager-side-setup) below) — deployed ONCE on the Wazuh manager, not per-agent |
-| [`fix-eve-stats-overflow.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/fix-eve-stats-overflow.ps1) | **critical fix** for already-installed agents: disables eve-log `stats` output, which silently blocks ALL Suricata data from ever reaching the manager (see Troubleshooting) — baked into `suricata-install.ps1` for new installs |
 
-> **Run everything from an Administrator PowerShell** (Win+X → *Terminal (Admin)*). All scripts declare `#Requires -RunAsAdministrator`.
+> **Run everything from an Administrator PowerShell** (Win+X → *Terminal (Admin)*). Both entry-point scripts declare `#Requires -RunAsAdministrator`.
 
 ---
 
 ## Quick start (single-line commands)
 
-**Install (local IDS; ships to a manager the agent is already enrolled to):**
+**Install everything** — Suricata + ET Open rules + agb-white/agb-black rules + daily auto-deploy + Active Response scripts:
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -SelfTest
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
 ```
+**Interactive by default** — prompts for capture interface and HOME_NET (press Enter on either to auto-pick/keep the stock default).
 
-**Install AND enroll the Wazuh agent to a manager:**
+**Install AND enroll the Wazuh agent to a manager**, or pass other options non-interactively (piping via `| iex` can't pass parameters — download first):
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WazuhManager <MANAGER_IP> -RegPassword 'YOUR_AUTHD_PASSWORD' -SelfTest
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WazuhManager <MANAGER_IP> -RegPassword 'YOUR_AUTHD_PASSWORD' -SelfTest
 ```
 
 **Install fully unattended (no prompts):**
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -NoPrompt -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -NoPrompt -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
 ```
-
-**Full setup — base Suricata install + AGB whitelist/blacklist auto-deploy, one command:**
-```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
-```
-**Interactive by default** — prompts for capture interface and HOME_NET (press Enter on either to auto-pick/keep the stock default). Then downloads `agb-white.rules`/`agb-black.rules` and registers a daily **1:30 PM** scheduled task that keeps them in sync with GitHub. See [AGB whitelist/blacklist auto-deploy](#agb-whitelistblacklist-auto-deploy) below.
-
-To pre-supply exact values non-interactively (piping via `| iex` can't pass parameters — download first):
-```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
-```
-Or skip both prompts and auto-pick everything: add `-NoPrompt` instead.
 
 **Test alerts on demand:**
 ```powershell
 $u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
 ```
 
-**Uninstall (deep clean; keeps Npcap + Wazuh agent):**
-```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall.ps1';$f="$env:TEMP\uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
-```
-
-**Preview an uninstall (changes nothing):**
-```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall.ps1';$f="$env:TEMP\uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
-```
-
-**Uninstall EVERYTHING (AGB rules auto-deploy + deep-clean base Suricata), one command:**
+**Uninstall everything** (deep clean; keeps Npcap + Wazuh agent):
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
 ```
-Counterpart to `agb-full-setup.ps1`. Supports the same switches as `uninstall.ps1` (`-AlsoRemoveNpcap`, `-RemoveWazuhAgent`, `-WhatIfOnly`) — pass them after `| iex` doesn't work for piped scripts, so download it first if you need switches:
+
+**Preview an uninstall (changes nothing), or pass other switches** (download first — piping can't pass parameters):
 ```powershell
 $u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1';$f="$env:TEMP\agb-full-uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
-```
-
-**Remove ONLY the AGB rules auto-deploy (keep base Suricata install):**
-```powershell
-iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-agb-rules.ps1 -UseBasicParsing | iex
 ```
 
 ---
@@ -101,23 +76,33 @@ iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win
 
 ---
 
-## What the installer does (step by step)
+## What `agb-full-setup.ps1` does (step by step)
 
-1. **Data dirs + Defender exclusions** under `C:\ProgramData\Suricata\` (`log` `rules` `state` `downloads`).
-2. **Npcap** — skipped if present; otherwise interactive wizard.
-3. **Suricata MSI** — uses a pre-staged `suricata.msi` if present (>5 MB); **auto-uninstalls any older Suricata first** (fixes MSI error 1638); silent `/qn` install; detects the installed version.
-4. **Capture interface** — auto-picks the fastest UP physical adapter (excludes virtual/VPN), or `-CaptureInterfaceName`.
-5. **ET Open ruleset** — downloads the version-matched `emerging.rules.tar.gz` (with `suricata-<major.minor>` fallbacks), merges all categories into a single `suricata.rules` (~50k signatures). `suricata-update` is broken on Windows, so this is direct.
-6. **`suricata.yaml`** — sets single-quoted `default-log-dir` / `default-rule-path`, optional `HOME_NET`, and **`rule-files: [suricata.rules]`** (the correct single merged file). Validated with a properly **quoted** `-T` test.
-7. **Service** — installed with a **quoted** ImagePath (`"suricata.exe" -c "suricata.yaml" -i "\Device\NPF_{...}"`), Automatic start.
-8. **Wazuh enrollment** *(optional)* — sets `<address>` and runs `agent-auth`; **skipped automatically if already enrolled** to that manager (`-ForceEnroll` to override).
-9. **eve.json binding** — writes one clean `<localfile log_format="json">` block into `ossec.conf` and restarts the agent (robust restart handles the "WazuhSvc cannot be stopped" race).
-10. **Daily maintenance** — scheduled task `Suricata Daily Update And Log Rotation` (SYSTEM, **13:00**): refresh ET Open + restart Suricata, and rotate `eve.json` past **2 GB** (keeps 3 copies).
-11. **Verify** — prints rule count, service states, manager link, logcollector status; `-SelfTest` waits for a live alert.
+**Step 1 — base Suricata install:**
+1. Data dirs + Defender exclusions under `C:\ProgramData\Suricata\` (`log` `rules` `state` `downloads`).
+2. Npcap — skipped if present; otherwise interactive wizard.
+3. Suricata MSI — uses a pre-staged `suricata.msi` if present (>5 MB); **auto-uninstalls any older Suricata first** (fixes MSI error 1638); silent `/qn` install.
+4. Capture interface — auto-picks the fastest UP physical adapter (excludes virtual/VPN), or `-CaptureInterfaceName`.
+5. ET Open ruleset — downloads the version-matched `emerging.rules.tar.gz`, merges all categories into a single `suricata.rules` (~50k signatures). `suricata-update` is broken on Windows, so this is direct.
+6. Downloads `agb-white.rules` / `agb-black.rules` straight from GitHub into the rules dir.
+7. `suricata.yaml` — sets `default-log-dir` / `default-rule-path`, optional `HOME_NET`, `rule-files: [suricata.rules, agb-white.rules, agb-black.rules]`, and **disables eve-log `stats` output** (see Troubleshooting — this is critical, not optional).
+8. Service — installed with a quoted ImagePath, Automatic start.
+9. Wazuh enrollment *(optional)* — sets `<address>` and runs `agent-auth`; skipped automatically if already enrolled.
+10. eve.json binding — writes one clean `<localfile log_format="json">` block into `ossec.conf` and restarts the agent.
+
+**Step 2 — AGB daily rule auto-deploy:**
+11. Downloads `deploy-agb-rules.ps1` into `C:\ProgramData\Suricata\agb-scripts\`.
+12. Registers scheduled task `AGB-Suricata-Rules-Deploy` (SYSTEM, daily **1:30 PM**) that runs it — pulls the latest `agb-white.rules`/`agb-black.rules` from GitHub and redeploys only if changed.
+13. Registers Suricata's own ET Open refresh + log-rotation task (SYSTEM, daily **13:00**).
+
+**Step 3 — Active Response:**
+14. Downloads `agb-kill-block.ps1`/`.cmd` into the Wazuh agent's `active-response\bin\` — this is what actually kills a process/blocks an IP when the manager tells it to (see [AGB whitelist/blacklist auto-deploy](#agb-whitelistblacklist-auto-deploy)).
+
+**Step 4 — Verify:** prints rule count, service states, manager link, logcollector status; `-SelfTest` waits for a live alert.
 
 ---
 
-## Parameters
+## Parameters (`agb-full-setup.ps1`)
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
@@ -130,9 +115,17 @@ iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win
 | `-HomeNet '[x.x.x.x/yy]'` | stock RFC1918 | set HOME_NET |
 | `-SelfTest` | off | wait for a live alert after install |
 | `-NoPrompt` | off | don't ask for interface / HOME_NET |
-| `-SkipNpcap` / `-SkipScheduledTask` | off | skip those steps |
+| `-SkipNpcap` / `-SkipScheduledTask` | off | skip those steps (SkipScheduledTask skips BOTH scheduled tasks) |
 | `-SkipWazuhEnroll` / `-ForceEnroll` | off | never / always enroll |
 | `-StripFileMagic` | off | drop the unsupported `file.magic` rules |
+
+## Parameters (`agb-full-uninstall.ps1`)
+
+| Parameter | Meaning |
+| --- | --- |
+| `-AlsoRemoveNpcap` | also uninstall Npcap (interactive) |
+| `-RemoveWazuhAgent` | also uninstall the Wazuh agent (rare) |
+| `-WhatIfOnly` | list what WOULD be removed, change nothing |
 
 ---
 
@@ -174,10 +167,11 @@ Options: `-IncludeInternetTests` (real ET rule via testmynids — may be hidden 
 
 ## Maintenance
 
-Registered automatically (skip with `-SkipScheduledTask`):
+Two scheduled tasks are registered automatically (skip both with `-SkipScheduledTask`):
 ```powershell
-Get-ScheduledTask -TaskName 'Suricata Daily Update And Log Rotation'    # check
-Start-ScheduledTask -TaskName 'Suricata Daily Update And Log Rotation'  # run now
+Get-ScheduledTask -TaskName 'Suricata Daily Update And Log Rotation'    # ET Open refresh + eve.json rotation, 13:00
+Get-ScheduledTask -TaskName 'AGB-Suricata-Rules-Deploy'                 # agb-white/agb-black pull-deploy, 1:30 PM
+Start-ScheduledTask -TaskName 'AGB-Suricata-Rules-Deploy'               # run either one now
 ```
 
 ---
@@ -214,15 +208,11 @@ available, e.g. Sysmon-sourced rule 100974) + blocks the IP via netsh firewall
 **`agb-black.rules`** — explicit `alert` rules for known-bad IPs/domains. Sensor-level defense-in-depth alongside manager-side Wazuh CDB IOC rules (`100311`/`100313`/`100974` for IPs, `100314` for domains) — even if `eve.json` shipping to the manager ever breaks, these still alert locally in `fast.log`/`eve.json`. sid range `1000100+` reserved for this file. **Note: Suricata itself only detects — it cannot kill/block. That enforcement happens on the manager side, see below.**
 
 ### Add an agent to the fleet
-Run the combined one-liner — installs Suricata, sets up the auto-deploy, **and** deploys the Active Response scripts (3 steps, one command):
+Run the installer — it covers Suricata, the auto-deploy task, and the Active Response scripts in one pass:
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
 ```
-Or, if Suricata is already installed on that agent, just add the auto-deploy task + AR scripts:
-```powershell
-iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/install-agb-rules-task.ps1 -UseBasicParsing | iex
-```
-An agent running this one-liner is only **half** the setup — the manager also needs the rules + Active Response binding configured once (see [Manager-side setup](#manager-side-setup)).
+An agent running this is only **half** the setup — the manager also needs the rules + Active Response binding configured once (see [Manager-side setup](#manager-side-setup)).
 
 ### Change the rules
 Edit `agb-white.rules` / `agb-black.rules` directly on GitHub (web UI or a local clone + push). Every agent running the scheduled task picks up the change at its next 1:30 PM run — no redeploy step needed anywhere else.
@@ -246,25 +236,21 @@ Get-NetFirewallRule -DisplayName "AGB-BLOCK-*" | Select DisplayName, Enabled, Ac
 
 ### Remove an agent from the fleet
 ```powershell
-# AGB rules auto-deploy only, keep Suricata itself:
-iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-agb-rules.ps1 -UseBasicParsing | iex
-
-# Everything (AGB auto-deploy + base Suricata deep-clean):
-iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
 ```
-Neither of these removes the manager-side rules/AR binding — that's a separate, one-time manager change (see below).
+This does NOT remove the manager-side rules/AR binding — that's a separate, one-time manager change (see below).
 
 ---
 
 ## Manager-side setup
 
-The agent one-liners above only cover the Suricata sensor. The Wazuh **manager** needs a one-time setup to (a) actually watch for blacklist hits shipped in from every agent, (b) correlate them, and (c) trigger the Active Response that does the kill+block. Files live in [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager):
+The agent installer above only covers the Suricata sensor. The Wazuh **manager** needs a one-time setup to (a) actually watch for blacklist hits shipped in from every agent, (b) correlate them, and (c) trigger the Active Response that does the kill+block. Files live in [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager):
 
 | File | Deploys to (on the manager) |
 | --- | --- |
 | `local_rules_c2.xml` | `/var/ossec/etc/rules/local_rules_c2.xml` |
 | `blocked_ips`, `interpreter_dest_allowlist`, `blocked_domains`, `allowed_domains` | `/var/ossec/etc/lists/` (each) |
-| `active-response/agb-kill-block.ps1` + `.cmd` | copied by each **agent's** `agb-full-setup.ps1`/`install-agb-rules-task.ps1` into its own `active-response\bin\` — NOT deployed on the manager itself |
+| `active-response/agb-kill-block.ps1` + `.cmd` | copied by each **agent's** `agb-full-setup.ps1` into its own `active-response\bin\` — NOT deployed on the manager itself |
 
 **One-time manager setup** (Docker example — adjust container name for your setup):
 ```powershell
@@ -302,7 +288,7 @@ If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager t
 
 | Symptom | Cause | Handling |
 | --- | --- | --- |
-| `no rules were loaded` | `rule-files` named non-existent files | installer writes `rule-files: [suricata.rules]` |
+| `no rules were loaded` | `rule-files` named non-existent files | installer writes `rule-files: [suricata.rules, agb-white.rules, agb-black.rules]` |
 | MSI exit **1638** | another Suricata already installed | installer auto-uninstalls it first |
 | MSI download stalls (VPN) | OISF unreachable over tunnel | pre-stage MSI / `-SuricataMsiPath` |
 | 9 rules failed, `file.magic` | no libmagic on Windows | harmless; `-StripFileMagic` to silence |
@@ -311,8 +297,8 @@ If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager t
 | `manager link: none` | agent reconnecting after restart | wait ~30 s and re-check |
 | `WazuhSvc cannot be stopped` | service stop race | installer force-stops/kills + restarts |
 | Npcap wizard pops up | free Npcap has no silent mode | tick *WinPcap API-compatible Mode*, finish |
-| `Log file '...eve.json' is duplicated`, Suricata data silently stops shipping to the manager (even though the agent shows Active and eve.json is growing locally) | eve.json `<localfile>` defined BOTH in this agent's local `ossec.conf` AND in a manager-side GROUP's shared `agent.conf` | check group membership on the manager: `agent_groups -s -i <id>`; if the agent is in a group that also defines eve.json, remove the LOCAL `<localfile>` block (regex in `uninstall.ps1`'s step 6, or manually) and keep only the group-managed one - having it in both places is unpredictable, not just noisy |
-| **ZERO Suricata alerts EVER reach the manager, for ANY agent** — agent shows Active, eve.json grows fine locally, agent log shows `Analyzing file: eve.json` with no errors, no duplicate warning either | Manager's `ossec.log` shows `wazuh-analysisd: ERROR: Too many fields for JSON decoder.` (check with `sudo grep -i "too many fields" /var/ossec/logs/ossec.log`) — Suricata's periodic `stats` eve.json record has hundreds of nested numeric fields (`decoder.*`, `tcp.*`, `app_layer.*`, `flow.*`); once flattened by Wazuh's generic JSON decoder it exceeds analysisd's hard field-count limit and the event is silently dropped ON THE MANAGER with zero indication on the agent side | run [`fix-eve-stats-overflow.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/fix-eve-stats-overflow.ps1) (elevated) to disable eve-log `stats` output and restart Suricata; `alert`/`flow`/`dns`/`http` events have far fewer fields and decode fine. Baked into `suricata-install.ps1` for new installs — this was THE root cause of a full day of debugging that looked like a shipping/duplicate-config/network problem on 2026-07-03 |
+| `Log file '...eve.json' is duplicated`, Suricata data silently stops shipping to the manager (even though the agent shows Active and eve.json is growing locally) | eve.json `<localfile>` defined BOTH in this agent's local `ossec.conf` AND in a manager-side GROUP's shared `agent.conf` | check group membership on the manager: `agent_groups -s -i <id>`; if the agent is in a group that also defines eve.json, remove the LOCAL `<localfile>` block (`agb-full-uninstall.ps1`'s step 7, or manually) and keep only the group-managed one - having it in both places is unpredictable, not just noisy |
+| **ZERO Suricata alerts EVER reach the manager, for ANY agent** — agent shows Active, eve.json grows fine locally, agent log shows `Analyzing file: eve.json` with no errors, no duplicate warning either | Manager's `ossec.log` shows `wazuh-analysisd: ERROR: Too many fields for JSON decoder.` (check with `sudo grep -i "too many fields" /var/ossec/logs/ossec.log`) — Suricata's periodic `stats` eve.json record has hundreds of nested numeric fields (`decoder.*`, `tcp.*`, `app_layer.*`, `flow.*`); once flattened by Wazuh's generic JSON decoder it exceeds analysisd's hard field-count limit and the event is silently dropped ON THE MANAGER with zero indication on the agent side | already fixed in `agb-full-setup.ps1` for new installs. For an agent installed before this fix, run [`fix-eve-stats-overflow.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/fix-eve-stats-overflow.ps1) (elevated) to disable eve-log `stats` output and restart Suricata; `alert`/`flow`/`dns`/`http` events have far fewer fields and decode fine. This was THE root cause of a full day of debugging that looked like a shipping/duplicate-config/network problem on 2026-07-03 |
 
 ---
 
@@ -322,7 +308,10 @@ If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager t
 | --- | --- |
 | Binaries + `suricata.yaml` | `C:\Program Files\Suricata\` |
 | eve.json | `C:\ProgramData\Suricata\log\eve.json` |
-| merged rules | `C:\ProgramData\Suricata\rules\suricata.rules` |
-| maintenance script | `C:\ProgramData\Suricata\Suricata-Maintenance.ps1` |
+| merged + agb rules | `C:\ProgramData\Suricata\rules\` (`suricata.rules`, `agb-white.rules`, `agb-black.rules`) |
+| agb-scripts | `C:\ProgramData\Suricata\agb-scripts\deploy-agb-rules.ps1` |
+| Suricata maintenance script | `C:\ProgramData\Suricata\Suricata-Maintenance.ps1` |
 | Wazuh agent config | `C:\Program Files (x86)\ossec-agent\ossec.conf` |
-| Manager alerts | `/var/ossec/logs/alerts/alerts.json` (rule `86601`) |
+| Active Response scripts | `C:\Program Files (x86)\ossec-agent\active-response\bin\agb-kill-block.ps1`/`.cmd` |
+| Active Response log | `C:\Program Files (x86)\ossec-agent\active-response\agb-kill-block.log` |
+| Manager alerts | `/var/ossec/logs/alerts/alerts.json` (rule `86601` base, `100311`-`100990` custom) |

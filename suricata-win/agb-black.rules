@@ -1,0 +1,24 @@
+# ============================================================================
+# AGB BLACKLIST - Suricata alert rules (agent-side)
+# ============================================================================
+# Explicit alert rules for known-bad IPs/domains, as a sensor-level
+# defense-in-depth layer alongside the manager-side CDB IOC checks
+# (Wazuh rules 100311/100313/100974 for IPs, 100314 for domains, in
+# local_rules_c2.xml). Even if eve.json shipping to the manager ever
+# breaks, these still alert locally in fast.log/eve.json.
+#
+# Add one alert rule per known-bad IP or domain. sid range 1000100+
+# reserved for this file (do not overlap 1000010+ used in agb-white.rules).
+# ============================================================================
+
+# Test C2 used during detection-engineering sessions (2026-06-30/07-01/07-02)
+alert ip any any -> 152.42.235.124 any (msg:"AGB BLACKLIST: known test C2 IP 152.42.235.124"; sid:1000100; rev:1;)
+
+# Senior's C2 test, decoded from base64 -EncodedCommand PowerShell reverse
+# shell on 2026-07-02 ~17:14 local (rule 92057/100980 caught the technique;
+# this adds sensor-level IP-based detection too)
+alert ip any any -> 47.236.236.2 any (msg:"AGB BLACKLIST: known C2 IP 47.236.236.2"; sid:1000101; rev:1;)
+
+# Add future known-bad IPs/domains below.
+# Example (commented out):
+# alert dns any any -> any any (msg:"AGB BLACKLIST: example bad domain"; dns.query; content:"evil.example"; sid:1000102; rev:1;)

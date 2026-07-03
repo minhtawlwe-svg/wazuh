@@ -1,0 +1,17 @@
+# ============================================================================
+# AGB WHITELIST - Suricata pass rules (agent-side)
+# ============================================================================
+# pass rules are evaluated BEFORE alert rules, so anything matching here is
+# silently allowed and never reaches the ET ruleset's alert logic. Keep this
+# file tight and specific - a pass rule is a blind spot by design.
+# ============================================================================
+
+# Allow our own AGB dynamic-DNS hosts (siem/itsiem/home.agb.mywire.org,
+# agbc.mywire.org) so they never generate ET DYN_DNS sid:2045987 alerts.
+# Any OTHER *.mywire.org (incl. real C2 like tnt200/area51/ethdns) still
+# alerts normally - this pattern only matches names starting with "agb".
+pass dns any any -> any any (msg:"AGB WHITELIST: Allow AGB DDNS"; dns.query; pcre:"/agb[a-z0-9]*\.mywire\.org$/i"; sid:1000010; rev:1;)
+
+# Add future known-good domains/IPs below, one pass rule per entry.
+# Example (commented out):
+# pass dns any any -> any any (msg:"AGB WHITELIST: example"; dns.query; content:"example.com"; sid:1000011; rev:1;)

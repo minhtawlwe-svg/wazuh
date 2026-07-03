@@ -246,6 +246,13 @@ This does NOT remove the manager-side rules/AR binding — that's a separate, on
 
 The agent installer above only covers the Suricata sensor. The Wazuh **manager** needs a one-time setup to (a) actually watch for blacklist hits shipped in from every agent, (b) correlate them, and (c) trigger the Active Response that does the kill+block. Files live in [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager):
 
+**⚠️ Also check `analysisd.decoder_order_size` in `/var/ossec/etc/internal_options.conf` on the manager.** Default is `256` on some Wazuh installs — too low for busy agents. Suricata's rich `alert`/`tls` events (ET metadata arrays, cert chains) can exceed 256 flattened fields, causing `wazuh-analysisd: ERROR: Too many fields for JSON decoder.` and silently dropping the event with zero indication anywhere on the agent side. Raise it to the max allowed (`1024`) and restart `wazuh-manager`:
+```bash
+sudo sed -i 's/analysisd.decoder_order_size=256/analysisd.decoder_order_size=1024/' /var/ossec/etc/internal_options.conf
+sudo /var/ossec/bin/wazuh-analysisd -t && sudo systemctl restart wazuh-manager
+```
+This is a manager-wide setting — check it once, benefits every connected agent.
+
 | File | Deploys to (on the manager) |
 | --- | --- |
 | `local_rules_c2.xml` | `/var/ossec/etc/rules/local_rules_c2.xml` |

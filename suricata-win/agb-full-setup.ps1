@@ -218,8 +218,23 @@ if($si -ge 0){
 } else {
     Log "no eve-log 'stats' block found - skipping"
 }
+# trim eve-log 'tls' fields (added 2026-07-03). extended:yes logs the FULL
+# certificate chain + subjectaltname (often dozens of SAN entries per cert,
+# each flattened into its own field) - on an actively-browsing desktop this
+# alone can push individual tls events past the field-count limit even with
+# stats disabled and decoder_order_size raised. Trimmed to a curated list
+# that keeps detection value (JA3/JA4 fingerprinting, SNI, cert identity)
+# without the chain/SAN explosion.
+$old = "        - tls:`r`n            extended: yes     # enable this for extended logging information"
+if($y.Contains($old)){
+    $new = "        - tls:`r`n            extended: no      # trimmed via custom list below - full chain/SAN caused JSON decoder field-count overflow on the manager`r`n            custom: [subject, issuer, sni, version, fingerprint, ja3, ja3s, ja4, not_before, not_after]"
+    $y = $y.Replace($old, $new)
+    Log "eve-log tls fields trimmed (dropped full cert chain/SAN, kept JA3/JA4/SNI/identity)"
+} else {
+    Log "eve-log tls extended-logging line not found in expected form - skipping trim (may already be customized)"
+}
 [IO.File]::WriteAllText($Yaml, $y, $utf8)
-Log "suricata.yaml configured (log-dir, rule-path, rule-files incl. agb rules, stats disabled)"
+Log "suricata.yaml configured (log-dir, rule-path, rule-files incl. agb rules, stats disabled, tls trimmed)"
 try { $tout = (& $Exe -T -c $Yaml 2>&1 | Out-String) } catch { $tout = "$_" }
 $tline = ($tout -split "`n" | Where-Object { $_ -match 'successfully loaded|no rules were loaded' } | Select-Object -First 1)
 if($tline){ Log ("  -T: " + $tline.Trim()) } else { Log "  -T: config parsed (file.magic warnings ignored on Windows)" }

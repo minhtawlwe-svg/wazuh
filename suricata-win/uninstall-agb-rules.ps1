@@ -55,14 +55,23 @@ if (Test-Path $SuricataYaml) {
 } else { Log "suricata.yaml not found (Suricata may already be uninstalled)" }
 
 # 5. Validate + restart Suricata (if still installed) ---------------------
+# NOTE: `suricata -T` is strict and always fails on the ~9 ET signatures
+# using the `file.magic` keyword (no libmagic on Windows builds) - this is
+# expected and harmless; the service loads fine at runtime, skipping only
+# those rules (see suricata-win/README.md Troubleshooting). Only treat this
+# as a real failure if there are OTHER, non-file.magic errors too.
 if ((Test-Path $SuricataExe) -and -not $WhatIfOnly) {
     $testOutput = & $SuricataExe -T -c $SuricataYaml 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Log "config test passed - restarting Suricata"
+    $errorLines = $testOutput | Where-Object { $_ -match '^E:' }
+    $realErrors = $errorLines | Where-Object { $_ -notmatch "unknown rule keyword 'file\.magic'" }
+
+    if ($LASTEXITCODE -eq 0 -or -not $realErrors) {
+        if ($errorLines) { Log "config test passed (ignoring $($errorLines.Count) expected file.magic errors)" }
+        else { Log "config test passed" }
         Restart-Service Suricata -ErrorAction SilentlyContinue
     } else {
         Write-Host "[!] Config test failed after removal - check suricata.yaml manually" -ForegroundColor Red
-        Write-Host ($testOutput -join "`n")
+        Write-Host ($realErrors -join "`n")
     }
 }
 

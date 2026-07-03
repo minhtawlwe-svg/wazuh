@@ -15,6 +15,22 @@
 
   Requires two CDB lists (blocked_ips + interpreter_dest_allowlist) that
   MUST be registered in ossec.conf <ruleset> and recompiled by a restart.
+
+  CRITICAL 2026-07-03: never declare <decoded_as>json</decoded_as> as a rule's
+  OWN top-level condition - Wazuh's stock rule 86600 (0475-suricata_rules.xml)
+  already claims decoded_as=json as its own top-level root and loads first on
+  most managers. A second competing top-level claim on the same decoder is
+  silently NEVER evaluated (not a "no match", just never tried) - this broke
+  every json-decoder rule below (100100/100101/100311/100313/100314) for a
+  full day before being found. Chain under <if_sid>86600</if_sid> instead
+  (works for ANY Suricata event type, not just event_type=alert) or
+  <if_sid>86601</if_sid> if you specifically need event_type=alert already
+  filtered. See project_intern_vm_suricata_agent040_mystery memory for the
+  full diagnostic trail. The 4 windows_eventchannel-decoded rules below
+  (100972/100974/100976/100978) were NOT audited for the same bug pattern -
+  worth checking if they're ever found not to fire, but the correct base
+  Sysmon "any windows_eventchannel" root rule ID wasn't verified before this
+  fix was made, so they were left as-is rather than guessed at.
   ============================================================================
 -->
 
@@ -22,16 +38,14 @@
 
   <!-- ICMP / Ping (substring match; '*ICMP*' glob is invalid in OS_Regex) -->
   <rule id="100100" level="5">
-    <decoded_as>json</decoded_as>
-    <field name="event_type">alert</field>
+    <if_sid>86601</if_sid>
     <field name="alert.signature">ICMP</field>
     <description>Suricata: ICMP/Ping detected</description>
     <group>suricata,ids,network,</group>
   </rule>
 
   <rule id="100101" level="3">
-    <decoded_as>json</decoded_as>
-    <field name="event_type">alert</field>
+    <if_sid>86601</if_sid>
     <field name="alert.signature">PING</field>
     <description>Suricata: Ping request detected</description>
     <group>suricata,ids,network,</group>
@@ -185,7 +199,7 @@
        c2_autokill group -> bound to Active Response (kill+block) in ossec.conf.
        CONFIRMED list match only - heuristic rules are NEVER in this group. -->
   <rule id="100311" level="13">
-    <decoded_as>json</decoded_as>
+    <if_sid>86600</if_sid>
     <list field="dest_ip" lookup="address_match_key">etc/lists/blocked_ips</list>
     <description>C2 IOC: traffic to known-bad IP $(dest_ip):$(dest_port)</description>
     <mitre><id>T1071</id></mitre>
@@ -194,7 +208,7 @@
 
   <!-- Suricata-side: any JSON event FROM a blocked IP (in case it initiates) -->
   <rule id="100313" level="13">
-    <decoded_as>json</decoded_as>
+    <if_sid>86600</if_sid>
     <list field="src_ip" lookup="address_match_key">etc/lists/blocked_ips</list>
     <description>C2 IOC: traffic from known-bad IP $(src_ip):$(src_port)</description>
     <mitre><id>T1071</id></mitre>
@@ -238,7 +252,7 @@
        already silenced at the AGENT via a Suricata pass rule anyway - this
        is a second, independent safety net). -->
   <rule id="100314" level="13">
-    <decoded_as>json</decoded_as>
+    <if_sid>86600</if_sid>
     <field name="dns.queries" type="pcre2">(?i)(?!.*agb\.mywire\.org)(evil-c2-test\.example)</field>
     <description>C2 IOC: DNS query for known-bad domain - $(dns.queries)</description>
     <mitre><id>T1071</id><id>T1568</id></mitre>

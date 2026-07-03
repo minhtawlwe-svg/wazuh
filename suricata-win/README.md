@@ -14,9 +14,14 @@ No external installer dependency. Portable across any user account (machine-wide
 
 | File | What it does |
 | --- | --- |
-| [`suricata-install.ps1`](https://github.com/yekyawhan/wazuh/blob/git-home/suricata-win/suricata-install.ps1) | installer + configurator + verifier |
-| [`Test-SuricataAlerts.ps1`](https://github.com/yekyawhan/wazuh/blob/git-home/suricata-win/Test-SuricataAlerts.ps1) | on-demand alert test (injects WAZUH-TEST rules, fires traffic, confirms) |
-| [`uninstall.ps1`](https://github.com/yekyawhan/wazuh/blob/git-home/suricata-win/uninstall.ps1) | deep clean (service, MSI, configs, rules, eve.json, task, Defender/firewall rules) |
+| [`suricata-install.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/suricata-install.ps1) | installer + configurator + verifier |
+| [`Test-SuricataAlerts.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/Test-SuricataAlerts.ps1) | on-demand alert test (injects WAZUH-TEST rules, fires traffic, confirms) |
+| [`uninstall.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall.ps1) | deep clean (service, MSI, configs, rules, eve.json, task, Defender/firewall rules) |
+| [`agb-full-setup.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-full-setup.ps1) | **one-line combined installer**: base Suricata install + AGB whitelist/blacklist auto-deploy |
+| [`agb-white.rules`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-white.rules) | Suricata `pass` rules (known-good domains/IPs) — **edit this on GitHub to change the whitelist** |
+| [`agb-black.rules`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-black.rules) | Suricata `alert` rules (known-bad C2 IPs/domains) — **edit this on GitHub to change the blacklist** |
+| [`deploy-agb-rules.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/deploy-agb-rules.ps1) | pull-deploy logic: downloads the two rules above from GitHub, validates, restarts Suricata only if changed |
+| [`install-agb-rules-task.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/install-agb-rules-task.ps1) | registers the daily 1:30 PM SYSTEM scheduled task that runs `deploy-agb-rules.ps1` |
 
 > **Run everything from an Administrator PowerShell** (Win+X → *Terminal (Admin)*). All scripts declare `#Requires -RunAsAdministrator`.
 
@@ -26,32 +31,38 @@ No external installer dependency. Portable across any user account (machine-wide
 
 **Install (local IDS; ships to a manager the agent is already enrolled to):**
 ```powershell
-$u='https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -SelfTest
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -SelfTest
 ```
 
 **Install AND enroll the Wazuh agent to a manager:**
 ```powershell
-$u='https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WazuhManager <MANAGER_IP> -RegPassword 'YOUR_AUTHD_PASSWORD' -SelfTest
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WazuhManager <MANAGER_IP> -RegPassword 'YOUR_AUTHD_PASSWORD' -SelfTest
 ```
 
 **Install fully unattended (no prompts):**
 ```powershell
-$u='https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -NoPrompt -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/suricata-install.ps1';$f="$env:TEMP\suricata-install.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -NoPrompt -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
 ```
+
+**Full setup — base Suricata install + AGB whitelist/blacklist auto-deploy, one command:**
+```powershell
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
+```
+Installs Suricata (unattended), then downloads `agb-white.rules`/`agb-black.rules` and registers a daily **1:30 PM** scheduled task that keeps them in sync with GitHub. See [AGB whitelist/blacklist auto-deploy](#agb-whitelistblacklist-auto-deploy) below.
 
 **Test alerts on demand:**
 ```powershell
-$u='https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
 ```
 
 **Uninstall (deep clean; keeps Npcap + Wazuh agent):**
 ```powershell
-$u='https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-win/uninstall.ps1';$f="$env:TEMP\uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall.ps1';$f="$env:TEMP\uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
 ```
 
 **Preview an uninstall (changes nothing):**
 ```powershell
-$u='https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-win/uninstall.ps1';$f="$env:TEMP\uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall.ps1';$f="$env:TEMP\uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
 ```
 
 ---
@@ -129,7 +140,7 @@ sudo /var/ossec/bin/agent_control -lc && sudo grep -c "Suricata: Alert" /var/oss
 
 Run it (single line):
 ```powershell
-$u='https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
 ```
 Confirm on the manager: `sudo grep WAZUH-TEST /var/ossec/logs/alerts/alerts.json`
 
@@ -143,6 +154,47 @@ Registered automatically (skip with `-SkipScheduledTask`):
 ```powershell
 Get-ScheduledTask -TaskName 'Suricata Daily Update And Log Rotation'    # check
 Start-ScheduledTask -TaskName 'Suricata Daily Update And Log Rotation'  # run now
+```
+
+---
+
+## AGB whitelist/blacklist auto-deploy
+
+A layered Suricata whitelist (`agb-white.rules`) + blacklist (`agb-black.rules`) pair, kept in sync across the fleet from **GitHub as the single source of truth**. Each agent independently pulls and deploys — no central push, no shared credentials, scales to any number of machines.
+
+```
+edit agb-white.rules / agb-black.rules on GitHub
+        │
+        ▼ (daily, 1:30 PM, per agent, SYSTEM-level scheduled task)
+deploy-agb-rules.ps1 pulls raw files → validates (suricata -T) → restarts Suricata only if changed
+```
+
+**`agb-white.rules`** — Suricata `pass` rules, evaluated before `alert` rules, so matches are silently allowed. Currently allows the AGB dynamic-DNS hosts (`agb*.mywire.org`) so they never trip `ET DYN_DNS` noise (sid 2045987 / Wazuh rule 86601).
+
+**`agb-black.rules`** — explicit `alert` rules for known-bad IPs/domains. Sensor-level defense-in-depth alongside manager-side Wazuh CDB IOC rules (`100311`/`100313`/`100974` for IPs, `100314` for domains) — even if `eve.json` shipping to the manager ever breaks, these still alert locally in `fast.log`/`eve.json`. sid range `1000100+` reserved for this file.
+
+### Add an agent to the fleet
+Run the combined one-liner (installs Suricata **and** sets up the auto-deploy):
+```powershell
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
+```
+Or, if Suricata is already installed on that agent, just add the auto-deploy task:
+```powershell
+iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/install-agb-rules-task.ps1 -UseBasicParsing | iex
+```
+
+### Change the rules
+Edit `agb-white.rules` / `agb-black.rules` directly on GitHub (web UI or a local clone + push). Every agent running the scheduled task picks up the change at its next 1:30 PM run — no redeploy step needed anywhere else.
+
+### Check a single agent's deploy status
+```powershell
+Get-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" | Select TaskName, State
+Get-Content "C:\ProgramData\Suricata\rules\agb-deploy.log" -Tail 20
+```
+
+### Force an immediate deploy (don't wait for 1:30 PM)
+```powershell
+& "C:\ProgramData\Suricata\agb-scripts\deploy-agb-rules.ps1"
 ```
 
 ---

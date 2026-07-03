@@ -22,6 +22,8 @@ No external installer dependency. Portable across any user account (machine-wide
 | [`agb-black.rules`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-black.rules) | Suricata `alert` rules (known-bad C2 IPs/domains) — **edit this on GitHub to change the blacklist** |
 | [`deploy-agb-rules.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/deploy-agb-rules.ps1) | pull-deploy logic: downloads the two rules above from GitHub, validates, restarts Suricata only if changed |
 | [`install-agb-rules-task.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/install-agb-rules-task.ps1) | registers the daily 1:30 PM SYSTEM scheduled task that runs `deploy-agb-rules.ps1` |
+| [`uninstall-agb-rules.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall-agb-rules.ps1) | removes ONLY the AGB rules auto-deploy (task, scripts, rule files); leaves base Suricata untouched |
+| [`agb-full-uninstall.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/agb-full-uninstall.ps1) | **one-line combined uninstaller**: removes AGB auto-deploy + deep-cleans base Suricata |
 
 > **Run everything from an Administrator PowerShell** (Win+X → *Terminal (Admin)*). All scripts declare `#Requires -RunAsAdministrator`.
 
@@ -63,6 +65,20 @@ $u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win
 **Preview an uninstall (changes nothing):**
 ```powershell
 $u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall.ps1';$f="$env:TEMP\uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
+```
+
+**Uninstall EVERYTHING (AGB rules auto-deploy + deep-clean base Suricata), one command:**
+```powershell
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
+```
+Counterpart to `agb-full-setup.ps1`. Supports the same switches as `uninstall.ps1` (`-AlsoRemoveNpcap`, `-RemoveWazuhAgent`, `-WhatIfOnly`) — pass them after `| iex` doesn't work for piped scripts, so download it first if you need switches:
+```powershell
+$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1';$f="$env:TEMP\agb-full-uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
+```
+
+**Remove ONLY the AGB rules auto-deploy (keep base Suricata install):**
+```powershell
+iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-agb-rules.ps1 -UseBasicParsing | iex
 ```
 
 ---
@@ -195,6 +211,15 @@ Get-Content "C:\ProgramData\Suricata\rules\agb-deploy.log" -Tail 20
 ### Force an immediate deploy (don't wait for 1:30 PM)
 ```powershell
 & "C:\ProgramData\Suricata\agb-scripts\deploy-agb-rules.ps1"
+```
+
+### Remove an agent from the fleet
+```powershell
+# AGB rules auto-deploy only, keep Suricata itself:
+iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-agb-rules.ps1 -UseBasicParsing | iex
+
+# Everything (AGB auto-deploy + base Suricata deep-clean):
+iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
 ```
 
 ---

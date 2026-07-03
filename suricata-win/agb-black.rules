@@ -1,11 +1,21 @@
 # ============================================================================
 # AGB BLACKLIST - Suricata alert rules (agent-side)
 # ============================================================================
-# Explicit alert rules for known-bad IPs/domains, as a sensor-level
-# defense-in-depth layer alongside the manager-side CDB IOC checks
-# (Wazuh rules 100311/100313/100974 for IPs, 100314 for domains, in
-# local_rules_c2.xml). Even if eve.json shipping to the manager ever
-# breaks, these still alert locally in fast.log/eve.json.
+# Explicit alert rules for known-bad IPs/domains. Every alert here shares
+# the "AGB BLACKLIST:" signature prefix, which manager rule 100316 (local
+# Docker manager) / 100802 (intern-vm) matches regardless of IP/domain -
+# this file IS the single source of truth for C2 IOC enforcement now
+# (see local_rules_c2.xml header, 2026-07-03 simplification). Even if
+# eve.json shipping to the manager ever breaks, these still alert locally
+# in fast.log/eve.json.
+#
+# IMPORTANT - domain rules (event_type:dns) are alert-only by design, NEVER
+# auto-kill: the AR script (agb-kill-block.ps1) detects event_type=dns and
+# skips IP-blocking, because dest_ip on a DNS alert is the DNS RESOLVER's
+# IP, not the malicious domain's actual IP. Blocking it would firewall your
+# own DNS server. If the client then connects to the resolved IP, THAT is
+# a separate flow/alert event with the real IP, correctly caught (and
+# auto-killed) by the IP-based rules above.
 #
 # Add one alert rule per known-bad IP or domain. sid range 1000100+
 # reserved for this file (do not overlap 1000010+ used in agb-white.rules).
@@ -19,6 +29,14 @@ alert ip any any -> 152.42.235.124 any (msg:"AGB BLACKLIST: known test C2 IP 152
 # this adds sensor-level IP-based detection too)
 alert ip any any -> 47.236.236.2 any (msg:"AGB BLACKLIST: known C2 IP 47.236.236.2"; sid:1000101; rev:1;)
 
+# Tor .onion hidden-service DNS queries - generic, not one specific domain.
+# Raw .onion resolution attempts are themselves a strong C2/exfiltration
+# indicator in most enterprise environments (legitimate business rarely
+# needs direct .onion access) - added 2026-07-03. Suffix-anchored regex
+# (not a plain content match) so it only matches queries actually ENDING
+# in .onion, not domains that merely contain the substring "onion".
+alert dns any any -> any any (msg:"AGB BLACKLIST: Tor .onion domain query"; dns.query; pcre:"/\.onion$/i"; sid:1000102; rev:1;)
+
 # Add future known-bad IPs/domains below.
 # Example (commented out):
-# alert dns any any -> any any (msg:"AGB BLACKLIST: example bad domain"; dns.query; content:"evil.example"; sid:1000102; rev:1;)
+# alert dns any any -> any any (msg:"AGB BLACKLIST: example bad domain"; dns.query; content:"evil.example"; sid:1000103; rev:1;)

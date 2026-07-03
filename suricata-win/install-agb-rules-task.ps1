@@ -21,19 +21,32 @@ Write-Host "[*] Downloading deploy-agb-rules.ps1 from GitHub..."
 Invoke-WebRequest -Uri $ScriptUrl -OutFile $LocalScript -UseBasicParsing
 Write-Host "[+] Saved to $LocalScript"
 
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    throw "This script must run in an ELEVATED (Administrator) PowerShell session - scheduled task registration as SYSTEM will silently fail otherwise."
+}
+
 $Action    = New-ScheduledTaskAction -Execute "powershell.exe" `
                -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$LocalScript`""
 $Trigger   = New-ScheduledTaskTrigger -Daily -At 1:30PM
-$Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$Principal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $Settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd
 
-Register-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" `
-    -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings `
-    -Description "Daily 1:30 PM: pull agb-white.rules/agb-black.rules from GitHub and deploy to Suricata" `
-    -Force | Out-Null
+try {
+    Register-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" `
+        -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings `
+        -Description "Daily 1:30 PM: pull agb-white.rules/agb-black.rules from GitHub and deploy to Suricata" `
+        -Force -ErrorAction Stop | Out-Null
+} catch {
+    Write-Host "[!] Register-ScheduledTask FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    throw
+}
 
+$verify = Get-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" -ErrorAction SilentlyContinue
+if (-not $verify) {
+    throw "Register-ScheduledTask reported success but the task is not visible via Get-ScheduledTask - registration did not actually persist."
+}
 Write-Host "[+] Scheduled task 'AGB-Suricata-Rules-Deploy' registered - runs daily at 1:30 PM as SYSTEM"
-Get-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" | Select TaskName, State
+$verify | Select TaskName, State
 
 Write-Host "`n[*] Running an initial deploy now to verify..."
 & $LocalScript

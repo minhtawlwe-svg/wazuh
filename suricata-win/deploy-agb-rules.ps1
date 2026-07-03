@@ -64,14 +64,23 @@ try {
         Log "[+] Added agb-white.rules / agb-black.rules to suricata.yaml rule-files"
     }
 
-    # 4. Validate BEFORE restarting
+    # 4. Validate BEFORE restarting.
+    # NOTE: `suricata -T` is strict and always fails on the ~9 ET signatures
+    # using the `file.magic` keyword (no libmagic on Windows builds) - this
+    # is expected/harmless, the service loads fine at runtime skipping only
+    # those rules (see README Troubleshooting). Only a REAL parse error
+    # (anything other than file.magic) should block the restart.
     $testOutput = & $SuricataExe -T -c $SuricataYaml 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Log "[!] Suricata config test FAILED - NOT restarting."
-        Log ($testOutput -join "`n")
+    $errorLines = $testOutput | Where-Object { $_ -match '^E:' }
+    $realErrors = $errorLines | Where-Object { $_ -notmatch "unknown rule keyword 'file\.magic'" }
+
+    if ($LASTEXITCODE -ne 0 -and $realErrors) {
+        Log "[!] Suricata config test FAILED (real errors, not just file.magic) - NOT restarting."
+        Log ($realErrors -join "`n")
         exit 1
     }
-    Log "[+] Suricata config test passed"
+    if ($errorLines) { Log "[+] Suricata config test passed (ignoring $($errorLines.Count) expected file.magic errors)" }
+    else { Log "[+] Suricata config test passed" }
 
     # 5. Restart to load new rules
     Restart-Service Suricata -ErrorAction Stop

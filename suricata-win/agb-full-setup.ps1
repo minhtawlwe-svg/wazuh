@@ -47,5 +47,18 @@ $agbInstaller = "$Tmp\install-agb-rules-task.ps1"
 Invoke-WebRequest -Uri "$Base/install-agb-rules-task.ps1" -OutFile $agbInstaller -UseBasicParsing
 & powershell.exe -ExecutionPolicy Bypass -File $agbInstaller
 
+# The nested child powershell.exe above can occasionally lose the parent's
+# elevation context (Windows-version-dependent), which used to make
+# Register-ScheduledTask fail silently. Verify here and self-heal by
+# re-running install-agb-rules-task.ps1 directly (not nested) if needed.
+if (-not (Get-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" -ErrorAction SilentlyContinue)) {
+    Write-Host "[!] Scheduled task not found after step 2 - retrying directly (non-nested)..." -ForegroundColor Yellow
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& '$agbInstaller'"
+    if (-not (Get-ScheduledTask -TaskName "AGB-Suricata-Rules-Deploy" -ErrorAction SilentlyContinue)) {
+        Write-Host "[!] Still not registered. Run this directly yourself in an elevated PowerShell:" -ForegroundColor Red
+        Write-Host "    iwr $Base/install-agb-rules-task.ps1 -UseBasicParsing | iex" -ForegroundColor Red
+    }
+}
+
 Write-Host "`n===== AGB full setup complete =====" -ForegroundColor Green
 Write-Host "Suricata installed + agb-white.rules/agb-black.rules deploying daily at 1:30 PM from GitHub."

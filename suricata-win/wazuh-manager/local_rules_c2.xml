@@ -1,0 +1,356 @@
+<!--
+  ============================================================================
+  C2 / Suricata / Sysmon detection rules for YOUR OWN Wazuh manager
+  ============================================================================
+  Verified 2026-06-30/07-02:
+   - Decoded Suricata fields have NO 'data.' prefix (decoded_as json).
+   - Sysmon fields arrive via decoder 'windows_eventchannel' as
+     win.system.* / win.eventdata.*.
+   - Command-line/script-block REGEX rules (100972/100978) CANNOT match
+     base64 -EncodedCommand payloads - Wazuh has no native base64 decode
+     in the rule engine. Built-in rule 92057 flags the base64 TECHNIQUE
+     itself; network-layer rules (100311/100313/100974/100976) are the
+     only layers that are encoding-independent - they inspect where the
+     connection actually goes, not the (possibly obfuscated) command text.
+
+  Requires two CDB lists (blocked_ips + interpreter_dest_allowlist) that
+  MUST be registered in ossec.conf <ruleset> and recompiled by a restart.
+  ============================================================================
+-->
+
+<group name="suricata,">
+
+  <!-- ICMP / Ping (substring match; '*ICMP*' glob is invalid in OS_Regex) -->
+  <rule id="100100" level="5">
+    <decoded_as>json</decoded_as>
+    <field name="event_type">alert</field>
+    <field name="alert.signature">ICMP</field>
+    <description>Suricata: ICMP/Ping detected</description>
+    <group>suricata,ids,network,</group>
+  </rule>
+
+  <rule id="100101" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="event_type">alert</field>
+    <field name="alert.signature">PING</field>
+    <description>Suricata: Ping request detected</description>
+    <group>suricata,ids,network,</group>
+  </rule>
+
+</group>
+
+<group name="suricata,local,">
+
+  <!-- ===== ESCALATE high-value categories (IP/port independent) ===== -->
+  <rule id="100300" level="12">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">A Network Trojan was detected</field>
+    <description>Suricata: Network Trojan / C2 - $(alert.signature)</description>
+    <mitre><id>T1071</id></mitre>
+  </rule>
+
+  <rule id="100301" level="12">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">Malware Command and Control Activity Detected</field>
+    <description>Suricata: Possible C2 Traffic - $(alert.signature)</description>
+    <mitre><id>T1071</id><id>T1571</id></mitre>
+  </rule>
+
+  <rule id="100302" level="13">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">Exploit Kit Activity Detected</field>
+    <description>Suricata: Exploit Kit activity - $(alert.signature)</description>
+    <mitre><id>T1203</id></mitre>
+  </rule>
+
+  <rule id="100303" level="13">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature" type="pcre2">GPL ATTACK_RESPONSE|id check returned root</field>
+    <description>Suricata: ATTACK RESPONSE - likely successful compromise - $(alert.signature)</description>
+    <mitre><id>T1068</id></mitre>
+  </rule>
+
+  <rule id="100304" level="12">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">Crypto Currency Mining Activity Detected</field>
+    <description>Suricata: Cryptominer activity - $(alert.signature)</description>
+    <mitre><id>T1496</id></mitre>
+  </rule>
+
+  <rule id="100305" level="10">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">Web Application Attack</field>
+    <description>Suricata: Web application attack - $(alert.signature)</description>
+    <mitre><id>T1190</id></mitre>
+  </rule>
+
+  <rule id="100306" level="10">
+    <if_sid>86601</if_sid>
+    <field name="alert.severity" type="pcre2">^1$</field>
+    <description>Suricata: high-severity alert - $(alert.signature)</description>
+  </rule>
+
+  <rule id="100307" level="10">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">Attempted Information Leak</field>
+    <description>Suricata: Sensitive File Disclosure Attempt - $(alert.signature)</description>
+    <mitre><id>T1005</id><id>T1083</id></mitre>
+  </rule>
+
+  <rule id="100308" level="10">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature">ET SCAN Potential VNC Scan 5800-5820</field>
+    <description>Suricata: ET SCAN Potential VNC Scan 5800-5820 - $(alert.signature)</description>
+  </rule>
+
+  <rule id="100309" level="10">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature">ET SCAN Potential SSH Scan</field>
+    <description>ET SCAN Potential SSH Scan - $(alert.signature)</description>
+  </rule>
+
+  <!-- C2 signature (PORT-DEPENDENT: only PowerShell on high port, sid 2044771) -->
+  <rule id="100310" level="12">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature_id">^2044771$</field>
+    <description>C2 NETWORK: PowerShell outbound high port -> $(dest_ip):$(dest_port)</description>
+    <mitre><id>T1071</id><id>T1059.001</id></mitre>
+    <group>c2_correlate,</group>
+  </rule>
+
+  <!-- ===== SUPPRESS noise (level 0) ===== -->
+  <rule id="100320" level="0">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">Not Suspicious Traffic</field>
+    <description>Suricata: benign - suppressed</description>
+  </rule>
+
+  <rule id="100322" level="0">
+    <if_sid>86601</if_sid>
+    <field name="alert.category">Generic Protocol Command Decode</field>
+    <description>Suricata: generic protocol decode - suppressed</description>
+  </rule>
+
+  <rule id="100323" level="0">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature_id" type="pcre2">^2013028$</field>
+    <description>Suricata: suppress ET POLICY curl User-Agent (example)</description>
+  </rule>
+
+</group>
+
+<group name="suricata,spamhaus,vpn,c2,custom,">
+
+  <!-- Spamhaus base (scoped to Spamhaus/DROP so it doesn't eat all alerts) -->
+  <rule id="100919" level="2">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature" type="pcre2">(?i)Spamhaus|DROP</field>
+    <description>Spamhaus DROP hit (low-noise base) - verdict from 100921/100922</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100921" level="2" frequency="15" timeframe="20">
+    <if_matched_sid>100919</if_matched_sid>
+    <same_source_ip />
+    <different_field>dest_ip</different_field>
+    <description>Many distinct Spamhaus DROP IPs from one host - VPN/proxy fan-out, benign</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100922" level="13" frequency="6" timeframe="180">
+    <if_matched_sid>100919</if_matched_sid>
+    <same_source_ip />
+    <same_field>dest_ip</same_field>
+    <description>C2 BEACON - host repeatedly contacting same Spamhaus DROP IP, ESCALATE</description>
+    <mitre><id>T1071</id><id>T1571</id></mitre>
+    <group>c2_correlate,</group>
+  </rule>
+
+</group>
+
+<!--
+  ============================================================================
+  C2 IOC BY IP - encoding-independent, port-independent, signature-independent.
+  This is your STRONGEST layer: matches on where traffic actually goes,
+  which an attacker cannot hide via -EncodedCommand, -File, or a new port.
+  NOT chained under if_sid 86601 - a rule gated behind "Suricata already
+  raised an alert" will NEVER fire for low/unusual ports (e.g. 99) that no
+  ET signature covers, defeating the whole purpose of an IOC blocklist.
+  Add IPs to etc/lists/blocked_ips as "ip:comment", then restart the manager.
+  ============================================================================
+-->
+<group name="c2_ioc,custom,">
+
+  <!-- Suricata-side: any JSON event (flow/http/dns/alert) to a blocked dest IP.
+       c2_autokill group -> bound to Active Response (kill+block) in ossec.conf.
+       CONFIRMED list match only - heuristic rules are NEVER in this group. -->
+  <rule id="100311" level="13">
+    <decoded_as>json</decoded_as>
+    <list field="dest_ip" lookup="address_match_key">etc/lists/blocked_ips</list>
+    <description>C2 IOC: traffic to known-bad IP $(dest_ip):$(dest_port)</description>
+    <mitre><id>T1071</id></mitre>
+    <group>c2_correlate,c2_autokill,</group>
+  </rule>
+
+  <!-- Suricata-side: any JSON event FROM a blocked IP (in case it initiates) -->
+  <rule id="100313" level="13">
+    <decoded_as>json</decoded_as>
+    <list field="src_ip" lookup="address_match_key">etc/lists/blocked_ips</list>
+    <description>C2 IOC: traffic from known-bad IP $(src_ip):$(src_port)</description>
+    <mitre><id>T1071</id></mitre>
+    <group>c2_correlate,c2_autokill,</group>
+  </rule>
+
+  <!-- Sysmon-side (host telemetry): catches it even if Suricata never sees
+       the packet (loopback, VPN-tunneled, or Suricata not deployed there).
+       HAS process context (image+PID) - the AR script kills the process
+       here, not just blocking the IP, unlike the Suricata-side rules above. -->
+  <rule id="100974" level="13">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.eventID">^3$</field>
+    <list field="win.eventdata.destinationIp" lookup="address_match_key">etc/lists/blocked_ips</list>
+    <description>C2 IOC (host): $(win.eventdata.image) -> known-bad IP $(win.eventdata.destinationIp):$(win.eventdata.destinationPort)</description>
+    <mitre><id>T1071</id></mitre>
+    <group>c2_correlate,c2_autokill,</group>
+  </rule>
+
+  <!-- Suricata's OWN agb-black.rules alerts (sid 1000100+, msg "AGB BLACKLIST"),
+       arriving as generic rule 86601 - escalate + tag for auto-kill so an IP
+       listed in agb-black.rules but not YET copied into the manager's
+       blocked_ips CDB still gets the same enforcement. -->
+  <rule id="100316" level="13">
+    <if_sid>86601</if_sid>
+    <field name="alert.signature" type="pcre2">^AGB BLACKLIST:</field>
+    <description>C2 IOC (Suricata agb-black.rules): $(alert.signature) - $(dest_ip):$(dest_port)</description>
+    <mitre><id>T1071</id></mitre>
+    <group>c2_correlate,c2_autokill,</group>
+  </rule>
+
+  <!-- C2 IOC BY DOMAIN. dns.queries arrives as a stringified Python-repr
+       array (e.g. "[{'rrname': 'evil.example', 'rrtype': 'A'}]"), NOT a
+       clean field - CDB list lookup needs an exact field value, which this
+       isn't, so match directly with pcre2 against the raw dns.queries
+       string instead (same approach proven working for the mywire-DDNS
+       fix, see project_suricata_mywire_ddns_tuning memory). Add new bad
+       domains here directly (pcre2 alternation), not via a CDB list.
+       agb.mywire.org hosts are explicitly excluded via negative lookahead
+       so your own DDNS infra never mistakenly matches here (that noise is
+       already silenced at the AGENT via a Suricata pass rule anyway - this
+       is a second, independent safety net). -->
+  <rule id="100314" level="13">
+    <decoded_as>json</decoded_as>
+    <field name="dns.queries" type="pcre2">(?i)(?!.*agb\.mywire\.org)(evil-c2-test\.example)</field>
+    <description>C2 IOC: DNS query for known-bad domain - $(dns.queries)</description>
+    <mitre><id>T1071</id><id>T1568</id></mitre>
+    <group>c2_correlate,</group>
+  </rule>
+
+</group>
+
+<!--
+  ============================================================================
+  UNKNOWN-C2 HOST DETECTION (Sysmon) - IP & PORT independent, no IOC needed.
+  Catches NOVEL attackers by BEHAVIOR. This is your second-strongest layer.
+  ============================================================================
+-->
+<group name="custom_c2,sysmon,unknown_c2,">
+
+  <!-- Reverse-shell / downloader command line (Sysmon EID1) - PLAINTEXT ONLY.
+       Will NOT match -EncodedCommand/-e payloads (see header note) - that's
+       what rule 100980 + rules 100311/100313/100974/100976 are for. -->
+  <rule id="100972" level="13">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.eventID">^1$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(Net\.Sockets\.TCPClient|socket\.socket\(|SOCK_STREAM|dup2\(s\.fileno|GetStream\(\)|IEX *\(.*DownloadString|FromBase64String|nc(\.exe)? +-e|ncat .* -e)</field>
+    <description>UNKNOWN C2: reverse-shell/downloader cmdline - $(win.eventdata.image) by $(win.eventdata.user)</description>
+    <mitre><id>T1059</id><id>T1071</id></mitre>
+    <group>c2_correlate,</group>
+  </rule>
+
+  <!-- Script interpreter making outbound EXTERNAL connection (Sysmon EID3).
+       ENCODING-INDEPENDENT - inspects the network connection, not the
+       command text, so it fires regardless of -Command/-File/-EncodedCommand. -->
+  <rule id="100976" level="12">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.eventID">^3$</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\(powershell|pwsh|python|python3|cmd|wscript|cscript|mshta|rundll32|regsvr32|certutil)\.exe$</field>
+    <field name="win.eventdata.destinationIp" type="pcre2">^(?!10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.|0\.|::1|fe80|ff02)</field>
+    <description>UNKNOWN C2: $(win.eventdata.image) outbound to external $(win.eventdata.destinationIp):$(win.eventdata.destinationPort)</description>
+    <mitre><id>T1071</id><id>T1059</id></mitre>
+    <group>c2_correlate,</group>
+  </rule>
+
+  <!-- ALLOWLIST override: benign destination -> suppress (more specific child wins) -->
+  <rule id="100977" level="0">
+    <if_sid>100976</if_sid>
+    <list field="win.eventdata.destinationIp" lookup="address_match_key">etc/lists/interpreter_dest_allowlist</list>
+    <description>Interpreter outbound to allowlisted destination - benign</description>
+  </rule>
+
+  <!-- PowerShell Script Block Logging (EID 4104) - PLAINTEXT ONLY, catches
+       reverse-shell code hidden from CommandLine via -File. Does NOT help
+       against -EncodedCommand either (script block IS the decoded text for
+       -Command/-File, but Windows logs -EncodedCommand's script block only
+       AFTER PowerShell decodes it internally - test whether this actually
+       decodes for -e specifically; unconfirmed live on this host, see
+       project memory for the channel-delivery reliability issue found
+       2026-07-01). Requires EnableScriptBlockLogging=1 (HKLM\SOFTWARE\
+       Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging) and a
+       <localfile> for Microsoft-Windows-PowerShell/Operational on the agent. -->
+  <rule id="100978" level="13">
+    <decoded_as>windows_eventchannel</decoded_as>
+    <field name="win.system.eventID">^4104$</field>
+    <field name="win.eventdata.scriptBlockText" type="pcre2">(?i)(Net\.Sockets\.TCPClient|socket\.socket\(|SOCK_STREAM|dup2\(s\.fileno|GetStream\(\)|IEX *\(.*DownloadString|FromBase64String|nc(\.exe)? +-e|ncat .* -e|Invoke-Expression.*ReadToEnd|StreamWriter.*NetworkStream)</field>
+    <description>UNKNOWN C2: reverse-shell/downloader script block on $(win.system.computer)</description>
+    <mitre><id>T1059</id><id>T1071</id><id>T1027</id></mitre>
+    <group>c2_correlate,</group>
+  </rule>
+
+</group>
+
+<!--
+  ============================================================================
+  ENCODED/OBFUSCATED POWERSHELL - the layer that actually caught your
+  senior's C2 (rule 92057 is BUILT-IN to Wazuh's default ruleset and fired
+  correctly on 2026-07-02). This child rule just labels it clearly as a C2
+  suspicion so it's not lost among generic "encoded PowerShell" noise.
+  ============================================================================
+-->
+<group name="custom_c2,encoded_powershell,">
+
+  <rule id="100980" level="12">
+    <if_sid>92057</if_sid>
+    <description>C2 SUSPECTED: base64-encoded PowerShell executed - $(win.eventdata.image) by $(win.eventdata.user)</description>
+    <mitre><id>T1059.001</id><id>T1027</id></mitre>
+    <group>c2_correlate,</group>
+  </rule>
+
+</group>
+
+<!--
+  ============================================================================
+  CORRELATION: fires ONE high-confidence alert when 2+ INDEPENDENT C2 layers
+  (tagged c2_correlate above: 100310, 100311, 100313, 100974, 100972, 100976,
+  100978, 100980, 100922) trigger on the SAME AGENT within 5 minutes.
+  Uses same_field agent.id (not same_source_ip) because Suricata events use
+  dest_ip/src_ip while Sysmon events use win.eventdata.destinationIp - the
+  one field guaranteed present and consistent across BOTH sources is
+  agent.id, so that's the correlator.
+
+  Rationale: no single layer here is false-positive-proof (see FP analysis
+  2026-07-02 - encoded PowerShell and interpreter-to-external-IP both have
+  real FP rates from legitimate tooling). Two DIFFERENT independent layers
+  agreeing on the same host in a short window is a much stronger signal
+  than any one of them alone, and is what should actually page someone.
+  ============================================================================
+-->
+<group name="c2_confirmed,">
+
+  <rule id="100990" level="15" frequency="2" timeframe="300">
+    <if_matched_group>c2_correlate</if_matched_group>
+    <same_field>agent.id</same_field>
+    <description>CONFIRMED C2: 2+ independent detection layers fired on $(agent.name) within 5 min - HIGH CONFIDENCE</description>
+    <mitre><id>T1071</id></mitre>
+  </rule>
+
+</group>

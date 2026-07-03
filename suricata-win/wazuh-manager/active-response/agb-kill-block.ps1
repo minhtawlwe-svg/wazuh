@@ -51,6 +51,19 @@ if ($command -ne "add") {
 $alert = $payload.parameters.alert
 if (-not $alert) { Log "no alert object in payload - exiting"; exit 1 }
 
+# --- SAFETY: never block on a DNS-type event. For event_type:"dns", dest_ip
+# is the DNS RESOLVER's IP (e.g. 8.8.8.8 or the org's DNS server), NOT the
+# malicious domain's actual IP - Suricata's DNS record has no resolved-IP
+# field usable for this. Blocking it would firewall your own DNS server
+# instead of the bad domain. Domain-based agb-black.rules alerts (or rule
+# 100314) should stay alert-only; the ACTUAL connection to the resolved IP
+# (a separate flow/alert event) is what the IP-based rules correctly catch. -->
+if ($alert.data.event_type -eq "dns") {
+    Log "[!] event_type=dns - dest_ip would be the DNS resolver, not the malicious domain's IP. Skipping block (domain-based detection stays alert-only by design). Add the RESOLVED IP to agb-black.rules once known instead."
+    Log "===== AR complete (skipped - dns event) ====="
+    exit 0
+}
+
 # --- Extract IP from whichever field is present (Suricata OR Sysmon side) ---
 $ip = $null
 foreach ($path in @(

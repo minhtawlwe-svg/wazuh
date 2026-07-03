@@ -198,8 +198,8 @@ available, e.g. Sysmon-sourced rule 100974) + blocks the IP via netsh firewall
 **IMPORTANT — what alerts vs. what auto-kills:**
 | | Behavior |
 | --- | --- |
-| **Whitelist match** (`agb-white.rules`, or manager `allowed_ips`/`allowed_domains`) | Silent, no alert |
-| **Confirmed blacklist match** (`agb-black.rules`, or manager `blocked_ips`/`blocked_domains`) | **Auto-kill**: process killed (if PID known) + IP blocked via firewall |
+| **Whitelist match** (`agb-white.rules`) | Silent, no alert |
+| **Confirmed blacklist match** (`agb-black.rules` signature -> rule `100316`, or manager `blocked_ips` CDB -> Sysmon-side rule `100974`) | **Auto-kill**: process killed (if PID known) + IP blocked via firewall |
 | **Heuristic/behavioral match** (encoded PowerShell, interpreter→external-IP, reverse-shell command patterns) | **Alert only** — for human review; promote the IP/domain to the blacklist once confirmed, it will NOT auto-kill on its own |
 | **No match on any list or pattern** | Silent |
 
@@ -256,7 +256,7 @@ This is a manager-wide setting — check it once, benefits every connected agent
 | File | Deploys to (on the manager) |
 | --- | --- |
 | `local_rules_c2.xml` | `/var/ossec/etc/rules/local_rules_c2.xml` |
-| `blocked_ips`, `interpreter_dest_allowlist`, `blocked_domains`, `allowed_domains` | `/var/ossec/etc/lists/` (each) |
+| `blocked_ips`, `interpreter_dest_allowlist` | `/var/ossec/etc/lists/` (each) — the only 2 CDB lists still used (domain-based IOC matching is inline pcre2 in rule `100314`, no CDB list needed) |
 | `active-response/agb-kill-block.ps1` + `.cmd` | copied by each **agent's** `agb-full-setup.ps1` into its own `active-response\bin\` — NOT deployed on the manager itself |
 
 **One-time manager setup** (Docker example — adjust container name for your setup):
@@ -264,12 +264,12 @@ This is a manager-wide setting — check it once, benefits every connected agent
 docker cp local_rules_c2.xml            <manager-container>:/var/ossec/etc/rules/local_rules_c2.xml
 docker cp blocked_ips                    <manager-container>:/var/ossec/etc/lists/blocked_ips
 docker cp interpreter_dest_allowlist      <manager-container>:/var/ossec/etc/lists/interpreter_dest_allowlist
-docker cp blocked_domains                <manager-container>:/var/ossec/etc/lists/blocked_domains
-docker cp allowed_domains                <manager-container>:/var/ossec/etc/lists/allowed_domains
-docker exec <manager-container> chown wazuh:wazuh /var/ossec/etc/rules/local_rules_c2.xml /var/ossec/etc/lists/blocked_ips /var/ossec/etc/lists/interpreter_dest_allowlist /var/ossec/etc/lists/blocked_domains /var/ossec/etc/lists/allowed_domains
+docker exec <manager-container> chown wazuh:wazuh /var/ossec/etc/rules/local_rules_c2.xml /var/ossec/etc/lists/blocked_ips /var/ossec/etc/lists/interpreter_dest_allowlist
 docker exec <manager-container> /var/ossec/bin/wazuh-analysisd -t
 ```
-If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager to load everything. The 4 CDB lists must also be registered in `ossec.conf`'s `<ruleset>` block (one `<list>etc/lists/...</list>` line each) if this is a fresh manager that's never had them before.
+If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager to load everything. Both CDB lists must also be registered in `ossec.conf`'s `<ruleset>` block (one `<list>etc/lists/...</list>` line each) if this is a fresh manager that's never had them before.
+
+**Critical:** never declare `<decoded_as>json</decoded_as>` as a rule's own top-level condition in `local_rules_c2.xml` — Wazuh's stock rule `86600` already claims that decoder as its own top-level root and loads first on most managers, silently preventing a second competing top-level rule from ever being evaluated. Chain custom rules under `<if_sid>86600</if_sid>` (any Suricata event type) or `<if_sid>86601</if_sid>` (alert-type only) instead. This broke every IP/domain-matching rule in this file for a full day before being found — see the `project_intern_vm_suricata_agent040_mystery` note if working from a memory-backed session.
 
 **Register the Active Response command + binding** in `ossec.conf` (once):
 ```xml

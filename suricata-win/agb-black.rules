@@ -24,11 +24,6 @@
 # Test C2 used during detection-engineering sessions (2026-06-30/07-01/07-02)
 alert ip any any -> 152.42.235.124 any (msg:"AGB BLACKLIST: known test C2 IP 152.42.235.124"; sid:1000100; rev:1;)
 
-# Senior's C2 test, decoded from base64 -EncodedCommand PowerShell reverse
-# shell on 2026-07-02 ~17:14 local (rule 92057/100980 caught the technique;
-# this adds sensor-level IP-based detection too)
-alert ip any any -> 47.236.236.2 any (msg:"AGB BLACKLIST: known C2 IP 47.236.236.2"; sid:1000101; rev:1;)
-
 # Tor .onion hidden-service DNS queries - generic, not one specific domain.
 # Raw .onion resolution attempts are themselves a strong C2/exfiltration
 # indicator in most enterprise environments (legitimate business rarely

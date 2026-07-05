@@ -137,12 +137,41 @@ if ($SelectedAdapter) {
 # driver) is exactly the profile Defender flags, and it lives OUTSIDE
 # C:\msys64 entirely.
 Log "Step 0/12: Windows Defender exclusions"
+# GOTCHA FIXED: on machines with Tamper Protection ON, Add-MpPreference
+# silently fails to actually enforce exclusion changes - Defender
+# deliberately ignores/reverts exclusion edits made via PowerShell (or any
+# non-UI method) while Tamper Protection is active, specifically so
+# malware can't disable its own detection via script. This is NOT a bug -
+# it's Tamper Protection working as designed - but it means the automated
+# path below can silently do nothing on a protected machine, and the build
+# fails later with cargo.exe/suricata.exe repeatedly quarantined despite
+# the script reporting the exclusion as "added". Detect this up front and
+# hand the exclusion step to the user via the trusted GUI path instead.
+$tamperProtected = $false
+try { $tamperProtected = [bool](Get-MpComputerStatus -ErrorAction Stop).IsTamperProtected } catch {}
+
+if ($tamperProtected) {
+    Warn "Tamper Protection is ON - Add-MpPreference cannot add real exclusions from a script on this machine (Defender ignores non-UI exclusion changes by design)."
+    Write-Host ""
+    Write-Host "  ACTION NEEDED - add these two folders as Defender exclusions yourself:" -ForegroundColor Yellow
+    Write-Host "    1. C:\msys64" -ForegroundColor Yellow
+    Write-Host "    2. $DeployRoot" -ForegroundColor Yellow
+    Write-Host "  via Windows Security > Virus & threat protection > Manage settings >" -ForegroundColor Yellow
+    Write-Host "  Exclusions > Add or remove exclusions > Add an exclusion > Folder." -ForegroundColor Yellow
+    Write-Host "  (opening Windows Security now)" -ForegroundColor Yellow
+    Start-Process "windowsdefender://threatsettings" -ErrorAction SilentlyContinue | Out-Null
+    Write-Host ""
+    Read-Host "Press Enter once both folders are added as exclusions"
+}
+
 foreach ($exPath in @('C:\msys64', $DeployRoot)) {
-    try {
-        Add-MpPreference -ExclusionPath $exPath -ErrorAction Stop
-    } catch {
-        Warn "Could not add Defender exclusion for $exPath ($($_.Exception.Message)). If files vanish moments after being written later in this script, add manually: Add-MpPreference -ExclusionPath '$exPath'"
-        continue
+    if (-not $tamperProtected) {
+        try {
+            Add-MpPreference -ExclusionPath $exPath -ErrorAction Stop
+        } catch {
+            Warn "Could not add Defender exclusion for $exPath ($($_.Exception.Message)). If files vanish moments after being written later in this script, add manually: Add-MpPreference -ExclusionPath '$exPath'"
+            continue
+        }
     }
     # GOTCHA FIXED: Add-MpPreference can report success instantly while
     # Defender's real-time protection engine takes a moment to actually

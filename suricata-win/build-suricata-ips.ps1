@@ -46,6 +46,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# GOTCHA FIXED: MSYSTEM defaults to plain "MSYS" for any bash invocation
+# that doesn't set it explicitly, and MSYS2 only adds /ucrt64/bin (where
+# cargo, rustc, and every mingw-w64-ucrt-x86_64-* package's binaries live)
+# to PATH when MSYSTEM=UCRT64 is active. This was previously only set
+# right before Step 7 (autogen/configure) - every earlier bash call,
+# including the Step 2 cargo verification, ran under plain MSYS with no
+# /ucrt64/bin on PATH, so `cargo --version` failed with "command not
+# found" (exit 127) even though cargo.exe was correctly installed and
+# working the whole time. Confirmed via `bash -lc "which cargo"` returning
+# nothing while a direct full-path invocation succeeded immediately - this
+# was misdiagnosed as AV quarantine for two full debugging rounds before
+# the actual PATH/environment bug was found. Set it here, before ANY bash
+# call happens.
+$env:MSYSTEM = "UCRT64"
 function Log($m)  { Write-Host "[ips-build] $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "[ips-build] WARN: $m" -ForegroundColor Yellow }
 function Die($m)  {
@@ -349,7 +363,6 @@ $wdLibUnix     = $WinDivertLib -replace '\\','/' -replace '^C:','/c'
 $npcapIncUnix  = $NpcapInclude -replace '\\','/' -replace '^C:','/c'
 $npcapLibUnix  = $NpcapLib -replace '\\','/' -replace '^C:','/c'
 
-$env:MSYSTEM = "UCRT64"
 Invoke-Bash "cd '$srcUnix' && ./autogen.sh" | Out-Null
 $configureCmd = "cd '$srcUnix' && ./configure --prefix=/usr/local " +
     "--with-libpcap-includes='$npcapIncUnix' --with-libpcap-libraries='$npcapLibUnix' " +

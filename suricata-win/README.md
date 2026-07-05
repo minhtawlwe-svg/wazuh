@@ -303,7 +303,7 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
 ```
 
-**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a self-contained binary + DLLs in `C:\SuricataIPS\`, for manual testing. Takes 20-60+ minutes (compiling ~250 Rust crates is the biggest cost) and needs ~5 GB free disk.
+**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a **ready-to-test** deployment in `C:\SuricataIPS\`: the binary, all runtime DLLs, a configured `suricata.yaml`, and a merged rules file. Takes 20-60+ minutes (compiling ~250 Rust crates is the biggest cost) and needs ~5 GB free disk.
 
 **What it automates** (every one of these was a real error hit and fixed during development — see the script's own inline comments for the full "why"):
 | Step | Gotcha it avoids |
@@ -314,12 +314,19 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 | **WinDivert 1.4.3 specifically, not the latest release (2.2.2)** | Suricata 8.0.3's C code is written against the old 1.x API — the current API is incompatible and fails with dozens of compile errors |
 | Locating the real binary | The top-level `src/suricata.exe` after a successful build is a libtool wrapper stub (~36 KB, won't run) — the real 100+ MB binary is hidden in `src/.libs/suricata.exe` |
 | Assembling runtime DLLs | This is a dynamically-linked build; needs `api-ms-win-crt-*.dll` (copied from `C:\Windows\System32\downlevel\`, not on the default search path) plus several `ucrt64/bin` libraries |
+| `suricata.yaml` + rules | Downloads the ET Open ruleset + `agb-black.rules`, merges them, and rewrites every rule's action from `alert` to `drop` — an `alert` rule still only *logs*, even under WinDivert; only `drop` actually blocks |
 
-**What's still manual after the script finishes** (deliberately not automated — each needs a human decision or elevated interactive session):
-1. Testing actual inline capture (`.\suricata.exe -c suricata.yaml --windivert true`) — needs Administrator and installs a kernel driver on first use, so it should be run interactively, not unattended.
-2. `suricata.yaml` needs a WinDivert-specific runmode section — different from the Npcap/pcap config the IDS deployment uses.
-3. Rules that should actually block need Suricata action `drop`, not `alert` — an `alert` rule still only logs, even under WinDivert.
-4. **Test on a disposable machine first.** Inline mode sits directly in the traffic path — a crash there can affect connectivity through that interface, a materially different risk profile than IDS-only.
+**⚠️ The full ET Open ruleset (~50,000 signatures) is converted to `drop` by this script.** Most of those signatures are tuned for *alerting*, not blocking — many are noisy/informational and will false-positive on legitimate traffic. This is exactly why real production IPS deployments curate a small, high-confidence subset for blocking rather than converting an entire IDS ruleset wholesale. The script prints a loud warning about this before generating the rules; **do not** run the test command below with a broad filter (`true` = capture everything) until you've confirmed narrow blocking works correctly and understand this risk.
+
+**What's still manual after the script finishes:**
+1. **Test with a narrow filter first** (Administrator, interactive — WinDivert installs a kernel driver on first use, so run this yourself, not unattended):
+   ```powershell
+   cd C:\SuricataIPS
+   .\suricata.exe -c suricata.yaml --windivert "ip.DstAddr == 152.42.235.124"
+   ```
+   (substitute your own test C2 IP — this narrow filter only intercepts traffic to that one address, not your whole connection)
+2. **Test on a disposable machine first**, not this laptop or any production agent. Inline mode sits directly in the traffic path — a crash there can affect connectivity through that interface, a materially different risk profile than IDS-only.
+3. Pass `-SkipRulesSetup` if you only want the bare binary (e.g. to write your own curated rule set instead of the full ET Open conversion).
 
 A full narrative write-up of the entire build (including every error exactly as it happened) exists as a Word document generated during development — ask for `Suricata-IPS-Mode-Build-Guide.docx` if you need the long-form version with screenshots-equivalent detail.
 

@@ -80,7 +80,7 @@ foreach ($svcName in @("WinDivert", "WinDivert1.4", "WinDivert1.2")) {
 # ---------- 2. IPS deploy folder ----------
 if (Test-Path $DeployRoot) {
     $sz = (Get-ChildItem $DeployRoot -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-    Act "delete $DeployRoot ($([math]::Round($sz/1MB,1)) MB) - the built suricata.exe + runtime DLLs"
+    Act "delete $DeployRoot ($([math]::Round($sz/1MB,1)) MB) - the built suricata.exe, runtime DLLs, suricata.yaml, and drop-converted rules"
     if (-not $WhatIfOnly) { Remove-Item $DeployRoot -Recurse -Force -ErrorAction SilentlyContinue }
 } else {
     Log "no IPS deploy folder at $DeployRoot"

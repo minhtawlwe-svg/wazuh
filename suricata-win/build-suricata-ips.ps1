@@ -27,9 +27,11 @@ param(
     [string]$WorkRoot        = "C:\msys64\home\$env:USERNAME\suricata-ips-build",
     [string]$DeployRoot      = "C:\SuricataIPS",       # final self-contained output
     [string]$NpcapUrl        = "https://npcap.com/dist/npcap-1.82.exe",
+    [string]$HomeNet         = "",                     # blank = keep stock RFC1918
     [switch]$SkipMsys2Install,                          # if MSYS2 already installed
     [switch]$SkipPackageInstall,                       # if deps already installed
-    [switch]$SkipNpcap                                 # if the Npcap DRIVER is already installed
+    [switch]$SkipNpcap,                                # if the Npcap DRIVER is already installed
+    [switch]$SkipRulesSetup                            # skip Step 10 - leaves just the bare binary, no yaml/rules
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +50,7 @@ $Bash = { param($cmd) & $Msys2Bash -lc $cmd }
 # exclusion, cargo.exe gets silently deleted within seconds of every install,
 # causing confusing "file not found" errors on the very next command. This
 # must happen BEFORE installing the rust package or downloading WinDivert.
-Log "Step 0/10: Windows Defender exclusion for C:\msys64"
+Log "Step 0/11: Windows Defender exclusion for C:\msys64"
 try {
     Add-MpPreference -ExclusionPath 'C:\msys64' -ErrorAction Stop
     Log "  exclusion added"
@@ -57,7 +59,7 @@ try {
 }
 
 # ---------- Step 1: MSYS2 ----------
-Log "Step 1/10: MSYS2 base install"
+Log "Step 1/11: MSYS2 base install"
 if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
     $tmp = "$env:TEMP\msys2-base.sfx.exe"
     Log "  downloading MSYS2 base archive..."
@@ -85,7 +87,7 @@ if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
 }
 
 # ---------- Step 2: build dependencies via pacman ----------
-Log "Step 2/10: build dependencies (this can take a while + may need retries - see gotcha)"
+Log "Step 2/11: build dependencies (this can take a while + may need retries - see gotcha)"
 if (-not $SkipPackageInstall) {
     # GOTCHA FIXED: several MSYS2 mirrors were unstable during this build
     # ("Operation too slow" / DNS resolution failures for specific mirrors).
@@ -124,7 +126,7 @@ if (-not $SkipPackageInstall) {
 }
 
 # ---------- Step 3: Npcap DRIVER (not just the SDK - the built binary needs this at runtime) ----------
-Log "Step 3/10: Npcap driver"
+Log "Step 3/11: Npcap driver"
 if (-not $SkipNpcap) {
     $hasNpcap = (Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap')
     if ($hasNpcap) {
@@ -146,7 +148,7 @@ if (-not $SkipNpcap) {
 }
 
 # ---------- Step 4: WinDivert 1.4.3 (NOT the latest version - see gotcha) ----------
-Log "Step 4/10: WinDivert 1.4.3"
+Log "Step 4/11: WinDivert 1.4.3"
 # GOTCHA FIXED: Suricata 8.0.3's source-windivert.c is written against the
 # OLD WinDivert 1.x API. The current WinDivert release (2.2.2) has a
 # materially different, incompatible API and will compile-fail with dozens
@@ -169,7 +171,7 @@ $WinDivertInclude   = "$WorkRoot\WinDivert-1.4.3-A\include"
 $WinDivertLib       = "$WorkRoot\WinDivert-1.4.3-A\x86_64"
 
 # ---------- Step 5: Npcap SDK ----------
-Log "Step 5/10: Npcap SDK (headers/libs for linking)"
+Log "Step 5/11: Npcap SDK (headers/libs for linking)"
 if (-not (Test-Path "$WorkRoot\npcap-sdk\Include\pcap.h")) {
     $npcapZip = "$WorkRoot\npcap-sdk-1.15.zip"
     Log "  downloading Npcap SDK..."
@@ -187,7 +189,7 @@ $NpcapInclude = "$WorkRoot\npcap-sdk\Include"
 $NpcapLib     = "$WorkRoot\npcap-sdk\Lib\x64"
 
 # ---------- Step 6: Suricata source ----------
-Log "Step 6/10: Suricata source ($SuricataVersion)"
+Log "Step 6/11: Suricata source ($SuricataVersion)"
 $SrcDir = "$WorkRoot\suricata-src"
 if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  cloning..."
@@ -198,7 +200,7 @@ if (-not (Test-Path "$SrcDir\configure.ac")) {
 }
 
 # ---------- Step 7: autogen + configure ----------
-Log "Step 7/10: autogen.sh + configure (WinDivert + Npcap flags)"
+Log "Step 7/11: autogen.sh + configure (WinDivert + Npcap flags)"
 $srcUnix       = $SrcDir -replace '\\','/' -replace '^C:','/c'
 $wdIncludeUnix = $WinDivertInclude -replace '\\','/' -replace '^C:','/c'
 $wdLibUnix     = $WinDivertLib -replace '\\','/' -replace '^C:','/c'
@@ -221,7 +223,7 @@ if ($acContent -notmatch "#define WINDIVERT 1" -or $acContent -notmatch "#define
 Log "  WinDivert + Npcap both confirmed detected"
 
 # ---------- Step 8: build ----------
-Log "Step 8/10: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
+Log "Step 8/11: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
 $cores = [Environment]::ProcessorCount
 & $Msys2Bash -lc "cd '$srcUnix' && make -j$cores" 2>&1 | Tee-Object -Variable makeOut | Out-Null
 $exitLine = $makeOut | Select-String "^make: \*\*\*" | Select-Object -Last 1
@@ -229,7 +231,7 @@ if ($exitLine) { Die "make failed: $exitLine`nFull log was very long - re-run ma
 Log "  build completed"
 
 # ---------- Step 9: find the REAL binary + assemble deploy folder ----------
-Log "Step 9/10: locating real binary + assembling self-contained deploy folder"
+Log "Step 9/11: locating real binary + assembling self-contained deploy folder"
 # GOTCHA FIXED: the top-level src/suricata.exe is a libtool WRAPPER STUB
 # (~36 KB) for a not-yet-installed binary that links against shared
 # libraries - it fails to run standalone (DLL load errors / "not
@@ -263,8 +265,125 @@ Copy-Item "$WinDivertLib\WinDivert.dll" $DeployRoot -Force
 
 Log "  deploy folder ready: $DeployRoot"
 
-# ---------- Step 10: verify ----------
-Log "Step 10/10: verify"
+# ---------- Step 10: config + DROP rules (full ET Open + agb-black.rules) ----------
+Log "Step 10/11: suricata.yaml + rules, converted to action 'drop' for real inline blocking"
+if (-not $SkipRulesSetup) {
+    Write-Host ""
+    Write-Host "########################################################################" -ForegroundColor Red
+    Write-Host "#  WARNING: converting the FULL ~50,000-signature ET Open ruleset to    #" -ForegroundColor Red
+    Write-Host "#  action 'drop' is a genuinely risky configuration on a live           #" -ForegroundColor Red
+    Write-Host "#  interface. Most ET Open signatures are tuned for ALERTING, not       #" -ForegroundColor Red
+    Write-Host "#  blocking - many are noisy/informational and will false-positive on   #" -ForegroundColor Red
+    Write-Host "#  legitimate traffic. Running this with a broad filter (e.g. 'true' =  #" -ForegroundColor Red
+    Write-Host "#  capture everything) can disrupt normal network use on this machine.  #" -ForegroundColor Red
+    Write-Host "#  This is why real production IPS deployments curate a SUBSET of       #" -ForegroundColor Red
+    Write-Host "#  high-confidence rules for blocking, not the entire IDS ruleset.      #" -ForegroundColor Red
+    Write-Host "#  Test with a NARROW WinDivert filter (one specific test IP), on a     #" -ForegroundColor Red
+    Write-Host "#  disposable machine, before ever considering 'true' or production use.#" -ForegroundColor Red
+    Write-Host "########################################################################" -ForegroundColor Red
+    Write-Host ""
+
+    $RuleDir = "$DeployRoot\rules"
+    $LogDir  = "$DeployRoot\log"
+    New-Item -ItemType Directory -Force -Path $RuleDir, $LogDir | Out-Null
+
+    # --- base suricata.yaml: prefer the build tree's own substituted copy,
+    # fall back to the existing IDS install's copy if present (same repo,
+    # already known-good), fail clearly if neither exists rather than
+    # silently skipping config setup.
+    $yamlSrc = $null
+    foreach ($candidate in @("$SrcDir\etc\suricata.yaml", "C:\Program Files\Suricata\suricata.yaml")) {
+        if (Test-Path $candidate) { $yamlSrc = $candidate; break }
+    }
+    if (-not $yamlSrc) {
+        Warn "  no base suricata.yaml found (checked build tree and existing IDS install) - skipping config/rules setup. Run agb-full-setup.ps1 first, or pass a yaml manually, then re-run with -SkipMsys2Install -SkipPackageInstall -SkipNpcap to just redo this step."
+    } else {
+        Copy-Item $yamlSrc "$DeployRoot\suricata.yaml" -Force
+        $utf8NoBom = New-Object Text.UTF8Encoding($false)
+        $y = Get-Content "$DeployRoot\suricata.yaml" -Raw
+        function Set-YamlKeyIps([string]$text,[string]$key,[string]$val){
+            if($text -match "(?m)^(\s*)$([regex]::Escape($key)):.*$"){ return [regex]::Replace($text,"(?m)^(\s*)$([regex]::Escape($key)):.*$","`${1}${key}: $val",1) }
+            return $text
+        }
+        $y = Set-YamlKeyIps $y 'default-log-dir'   ("'{0}'" -f $LogDir)
+        $y = Set-YamlKeyIps $y 'default-rule-path' ("'{0}'" -f $RuleDir)
+        if ($HomeNet) { $y = Set-YamlKeyIps $y 'HOME_NET' ('"{0}"' -f $HomeNet) }
+        # rule-files -> just our one merged+converted file
+        $ylines = $y -split "`r?`n"
+        $rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }
+        if($rf -ge 0){
+            $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
+            $ylines = @($ylines[0..$rf]) + @('  - suricata-drop.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+            $y = $ylines -join "`r`n"
+        }
+        # same eve-log stats overflow fix as agb-full-setup.ps1 - see that
+        # script's comments / README Troubleshooting for the full "why"
+        $ylines = $y -split "`r?`n"
+        $si=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^(\s*)-\s*stats:\s*$'){ $si=$i; break } }
+        if($si -ge 0){
+            $indent = ($ylines[$si] -replace '-.*$','').Length
+            $j=$si+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s+\S' -and (($ylines[$j] -replace '^(\s*).*$','$1').Length) -gt $indent){ $j++ }
+            $pad = ' ' * ($indent + 4)
+            $ylines = @($ylines[0..$si]) + @("$pad" + 'enabled: no') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+            $y = $ylines -join "`r`n"
+        }
+        [IO.File]::WriteAllText("$DeployRoot\suricata.yaml", $y, $utf8NoBom)
+        Log "  suricata.yaml written ($DeployRoot\suricata.yaml)"
+
+        # --- ET Open ruleset, version-matched, same source as agb-full-setup.ps1 ---
+        $ver = (& "$DeployRoot\suricata.exe" -V 2>&1 | Select-String -Pattern '(\d+\.\d+\.\d+)' | Select-Object -First 1).Matches.Groups[1].Value
+        $mm = $ver.Substring(0, $ver.LastIndexOf('.'))
+        $tarPath = "$WorkRoot\emerging.rules.tar.gz"
+        $urls = @("https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz",
+                  "https://rules.emergingthreats.net/open/suricata-$mm.0/emerging.rules.tar.gz",
+                  "https://rules.emergingthreats.net/open/suricata-$mm/emerging.rules.tar.gz")
+        $got = $false
+        foreach ($u in $urls) { try { Log "  downloading ET Open: $u"; Invoke-WebRequest -Uri $u -OutFile $tarPath -UseBasicParsing; $got = $true; break } catch { Warn "  failed $u" } }
+        if (-not $got) {
+            Warn "  could not download ET Open ruleset - proceeding with agb-black.rules only"
+        } else {
+            $extractDir = "$WorkRoot\rules-extract"
+            if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+            & tar.exe -xzf $tarPath -C $extractDir
+        }
+
+        # --- agb-black.rules from the repo (same blacklist as the IDS deployment) ---
+        $agbBlackPath = "$WorkRoot\agb-black.rules"
+        try {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-black.rules" -OutFile $agbBlackPath -UseBasicParsing
+        } catch { Warn "  could not download agb-black.rules ($($_.Exception.Message))" }
+
+        # --- merge everything, then convert action alert -> drop ---
+        # GOTCHA/RISK: this converts EVERY signature to blocking, including
+        # low-confidence/informational ET rules never designed for it - see
+        # the loud warning printed above. DNS-type rules are included in the
+        # conversion too (WinDivert drops the query packet itself here,
+        # which is safe/correct at the packet level - unlike the Active
+        # Response scenario in agb-kill-block.ps1, there is no "wrong IP"
+        # to block since nothing downstream is guessing at a resolved IP).
+        $utf8 = New-Object Text.UTF8Encoding($false)
+        $sb = New-Object Text.StringBuilder
+        if (Test-Path $extractDir) {
+            $rfiles = Get-ChildItem (Join-Path $extractDir 'rules') -Filter *.rules -ErrorAction SilentlyContinue
+            if (-not $rfiles) { $rfiles = Get-ChildItem $extractDir -Recurse -Filter *.rules }
+            foreach ($f in $rfiles) { [void]$sb.AppendLine([IO.File]::ReadAllText($f.FullName)) }
+        }
+        if (Test-Path $agbBlackPath) { [void]$sb.AppendLine([IO.File]::ReadAllText($agbBlackPath)) }
+        $rulesText = $sb.ToString()
+        $dropRulesText = [regex]::Replace($rulesText, '(?m)^alert\s', 'drop ')
+        $sigCountTotal = ([regex]::Matches($rulesText, '(?m)^\s*(alert|drop)\s')).Count
+        $sigCountDrop  = ([regex]::Matches($dropRulesText, '(?m)^\s*drop\s')).Count
+        [IO.File]::WriteAllText("$RuleDir\suricata-drop.rules", $dropRulesText, $utf8)
+        Log "  wrote $RuleDir\suricata-drop.rules ($sigCountTotal signatures, $sigCountDrop converted to drop)"
+        Log "  original alert-only copies kept for reference: $tarPath / $agbBlackPath"
+    }
+} else {
+    Log "  skipped (-SkipRulesSetup) - deploy folder has only the binary, no yaml/rules"
+}
+
+# ---------- Step 11: verify ----------
+Log "Step 11/11: verify"
 Push-Location $DeployRoot
 try {
     $verOut = & ".\suricata.exe" -V 2>&1
@@ -284,19 +403,32 @@ Write-Host ("  " + $(if ($npcapLine) { $npcapLine.Line.Trim() } else { "Npcap st
 if ($versionLine -and $wdLine -match "yes") {
     Write-Host "`n===== SUCCESS =====" -ForegroundColor Green
     Write-Host "Custom Suricata build with WinDivert IPS support is ready at: $DeployRoot"
+    Write-Host "This is a SEPARATE, EXPERIMENTAL build - it has NOT touched your existing IDS-mode install." -ForegroundColor Yellow
+
+    $rulesReady = Test-Path "$DeployRoot\suricata.yaml"
+    if ($rulesReady) {
+        Write-Host ""
+        Write-Host "suricata.yaml + suricata-drop.rules (ET Open + agb-black.rules, converted to 'drop') are ready." -ForegroundColor Green
+        Write-Host ""
+        Write-Host "  NEXT STEP - test with a NARROW filter first (Administrator, interactive -" -ForegroundColor Yellow
+        Write-Host "  installs a kernel driver on first use, so run this yourself, not unattended):" -ForegroundColor Yellow
+        Write-Host "    cd '$DeployRoot'" -ForegroundColor Yellow
+        Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"ip.DstAddr == 152.42.235.124`"" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  Do NOT run with a broad filter like `"true`" (= capture everything) until" -ForegroundColor Red
+        Write-Host "  you've confirmed narrow blocking works and understand the false-positive" -ForegroundColor Red
+        Write-Host "  risk of the full ET Open ruleset running in DROP mode (see the warning" -ForegroundColor Red
+        Write-Host "  printed during Step 10, or the README's IPS mode section)." -ForegroundColor Red
+    } else {
+        Write-Host ""
+        Write-Host "Rules/config setup was skipped or failed - deploy folder has only the bare" -ForegroundColor Yellow
+        Write-Host "binary. Re-run without -SkipRulesSetup (or check the Step 10 warning above)" -ForegroundColor Yellow
+        Write-Host "to get a testable suricata.yaml + drop-converted rules." -ForegroundColor Yellow
+    }
     Write-Host ""
-    Write-Host "This is a SEPARATE, EXPERIMENTAL build - it has NOT touched your existing" -ForegroundColor Yellow
-    Write-Host "IDS-mode Suricata install (agb-full-setup.ps1). Remaining manual steps:" -ForegroundColor Yellow
-    Write-Host "  1. Test inline capture (requires Administrator, installs a kernel driver" -ForegroundColor Yellow
-    Write-Host "     on first use - run interactively, not automated):" -ForegroundColor Yellow
-    Write-Host "       cd '$DeployRoot'; .\suricata.exe -c suricata.yaml --windivert true" -ForegroundColor Yellow
-    Write-Host "  2. suricata.yaml needs a WinDivert-specific runmode config, not the" -ForegroundColor Yellow
-    Write-Host "     Npcap/pcap capture config used by the IDS deployment." -ForegroundColor Yellow
-    Write-Host "  3. Rules that should actually BLOCK need action 'drop', not 'alert' -" -ForegroundColor Yellow
-    Write-Host "     'alert' rules still only log, even under WinDivert." -ForegroundColor Yellow
-    Write-Host "  4. Test on a disposable machine before considering this for a" -ForegroundColor Yellow
-    Write-Host "     production agent - inline mode sitting in the traffic path is a" -ForegroundColor Yellow
-    Write-Host "     materially different risk profile than IDS-only." -ForegroundColor Yellow
+    Write-Host "Also remember: test on a disposable machine before considering this for a" -ForegroundColor Yellow
+    Write-Host "production agent - inline mode sitting in the traffic path is a materially" -ForegroundColor Yellow
+    Write-Host "different risk profile than IDS-only." -ForegroundColor Yellow
 } else {
     Die "Build produced a binary but verification failed - check the output above"
 }

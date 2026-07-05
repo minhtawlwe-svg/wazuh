@@ -48,7 +48,36 @@ $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 function Log($m)  { Write-Host "[ips-build] $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "[ips-build] WARN: $m" -ForegroundColor Yellow }
-function Die($m)  { Write-Host "[ips-build] FATAL: $m" -ForegroundColor Red; exit 1 }
+function Die($m)  {
+    Write-Host "[ips-build] FATAL: $m" -ForegroundColor Red
+    # GOTCHA FIXED: if this script is launched via a one-liner that spawns a
+    # fresh elevated PowerShell window (e.g. right-click "Run as
+    # Administrator" on a shortcut, or an iwr|iex from a non-elevated
+    # session that triggers a new elevated process), that window closes the
+    # INSTANT the script exits - the fatal message flashes and disappears
+    # before it can be read. Pause unless running unattended (-NoPrompt).
+    if (-not $NoPrompt) {
+        Write-Host "[ips-build] (press Enter to close this window)" -ForegroundColor DarkGray
+        Read-Host | Out-Null
+    }
+    exit 1
+}
+
+# GOTCHA FIXED: same window-disappears-before-you-can-read-it problem, but
+# for an UNHANDLED exception anywhere in the script that never goes through
+# Die() at all (e.g. a native command failure not wrapped by Invoke-Bash,
+# or any other terminating error under $ErrorActionPreference='Stop'). This
+# script-scope trap catches those too, prints the real exception, and
+# pauses the same way before the window can close.
+trap {
+    Write-Host "[ips-build] UNHANDLED ERROR: $_" -ForegroundColor Red
+    Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+    if (-not $NoPrompt) {
+        Write-Host "[ips-build] (press Enter to close this window)" -ForegroundColor DarkGray
+        Read-Host | Out-Null
+    }
+    exit 1
+}
 
 $Msys2Bash = "C:\msys64\usr\bin\bash.exe"
 
@@ -566,6 +595,14 @@ if ($versionLine -and $wdLine -match "yes") {
     Write-Host "Also remember: test on a disposable machine before considering this for a" -ForegroundColor Yellow
     Write-Host "production agent - inline mode sitting in the traffic path is a materially" -ForegroundColor Yellow
     Write-Host "different risk profile than IDS-only." -ForegroundColor Yellow
+    # same window-closes-before-you-can-read-it concern as Die() - pause on
+    # the success path too if this was launched as a self-closing elevated
+    # window (one-liner / shortcut), not just on failure.
+    if (-not $NoPrompt) {
+        Write-Host ""
+        Write-Host "[ips-build] (press Enter to close this window)" -ForegroundColor DarkGray
+        Read-Host | Out-Null
+    }
 } else {
     Die "Build produced a binary but verification failed - check the output above"
 }

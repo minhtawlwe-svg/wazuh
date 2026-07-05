@@ -26,8 +26,10 @@ param(
     [string]$SuricataVersion = "suricata-8.0.3",     # git tag to build
     [string]$WorkRoot        = "C:\msys64\home\$env:USERNAME\suricata-ips-build",
     [string]$DeployRoot      = "C:\SuricataIPS",       # final self-contained output
+    [string]$NpcapUrl        = "https://npcap.com/dist/npcap-1.82.exe",
     [switch]$SkipMsys2Install,                          # if MSYS2 already installed
-    [switch]$SkipPackageInstall                        # if deps already installed
+    [switch]$SkipPackageInstall,                       # if deps already installed
+    [switch]$SkipNpcap                                 # if the Npcap DRIVER is already installed
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,7 +48,7 @@ $Bash = { param($cmd) & $Msys2Bash -lc $cmd }
 # exclusion, cargo.exe gets silently deleted within seconds of every install,
 # causing confusing "file not found" errors on the very next command. This
 # must happen BEFORE installing the rust package or downloading WinDivert.
-Log "Step 0/9: Windows Defender exclusion for C:\msys64"
+Log "Step 0/10: Windows Defender exclusion for C:\msys64"
 try {
     Add-MpPreference -ExclusionPath 'C:\msys64' -ErrorAction Stop
     Log "  exclusion added"
@@ -55,7 +57,7 @@ try {
 }
 
 # ---------- Step 1: MSYS2 ----------
-Log "Step 1/9: MSYS2 base install"
+Log "Step 1/10: MSYS2 base install"
 if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
     $tmp = "$env:TEMP\msys2-base.sfx.exe"
     Log "  downloading MSYS2 base archive..."
@@ -83,7 +85,7 @@ if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
 }
 
 # ---------- Step 2: build dependencies via pacman ----------
-Log "Step 2/9: build dependencies (this can take a while + may need retries - see gotcha)"
+Log "Step 2/10: build dependencies (this can take a while + may need retries - see gotcha)"
 if (-not $SkipPackageInstall) {
     # GOTCHA FIXED: several MSYS2 mirrors were unstable during this build
     # ("Operation too slow" / DNS resolution failures for specific mirrors).
@@ -121,8 +123,30 @@ if (-not $SkipPackageInstall) {
     Log "  skipped (-SkipPackageInstall)"
 }
 
-# ---------- Step 3: WinDivert 1.4.3 (NOT the latest version - see gotcha) ----------
-Log "Step 3/9: WinDivert 1.4.3"
+# ---------- Step 3: Npcap DRIVER (not just the SDK - the built binary needs this at runtime) ----------
+Log "Step 3/10: Npcap driver"
+if (-not $SkipNpcap) {
+    $hasNpcap = (Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap')
+    if ($hasNpcap) {
+        Log "  already installed, skipping"
+    } else {
+        $npInstaller = "$env:TEMP\npcap-installer.exe"
+        Log "  downloading Npcap..."
+        Invoke-WebRequest -Uri $NpcapUrl -OutFile $npInstaller -UseBasicParsing
+        Warn "  Npcap's free build has NO silent-install mode - an interactive wizard will open now."
+        Warn "  Tick 'Install Npcap in WinPcap API-compatible Mode', then Install, then Finish."
+        Start-Process -FilePath $npInstaller -Wait
+        if (-not ((Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap'))) {
+            Die "Npcap not detected after the wizard closed - re-run this script and complete the wizard fully"
+        }
+        Log "  Npcap installed"
+    }
+} else {
+    Log "  skipped (-SkipNpcap)"
+}
+
+# ---------- Step 4: WinDivert 1.4.3 (NOT the latest version - see gotcha) ----------
+Log "Step 4/10: WinDivert 1.4.3"
 # GOTCHA FIXED: Suricata 8.0.3's source-windivert.c is written against the
 # OLD WinDivert 1.x API. The current WinDivert release (2.2.2) has a
 # materially different, incompatible API and will compile-fail with dozens
@@ -144,8 +168,8 @@ if (-not (Test-Path "$WorkRoot\WinDivert-1.4.3-A\include\windivert.h")) {
 $WinDivertInclude   = "$WorkRoot\WinDivert-1.4.3-A\include"
 $WinDivertLib       = "$WorkRoot\WinDivert-1.4.3-A\x86_64"
 
-# ---------- Step 4: Npcap SDK ----------
-Log "Step 4/9: Npcap SDK (headers/libs for linking - the driver itself must already be installed)"
+# ---------- Step 5: Npcap SDK ----------
+Log "Step 5/10: Npcap SDK (headers/libs for linking)"
 if (-not (Test-Path "$WorkRoot\npcap-sdk\Include\pcap.h")) {
     $npcapZip = "$WorkRoot\npcap-sdk-1.15.zip"
     Log "  downloading Npcap SDK..."
@@ -161,12 +185,9 @@ if (-not (Test-Path "$WorkRoot\npcap-sdk\Include\pcap.h")) {
 }
 $NpcapInclude = "$WorkRoot\npcap-sdk\Include"
 $NpcapLib     = "$WorkRoot\npcap-sdk\Lib\x64"
-if (-not (Get-Service npcap -ErrorAction SilentlyContinue) -and -not (Test-Path 'C:\Windows\System32\Npcap')) {
-    Warn "  Npcap DRIVER does not appear to be installed - the built binary will fail at runtime without it. Install Npcap separately (npcap.com) before testing."
-}
 
-# ---------- Step 5: Suricata source ----------
-Log "Step 5/9: Suricata source ($SuricataVersion)"
+# ---------- Step 6: Suricata source ----------
+Log "Step 6/10: Suricata source ($SuricataVersion)"
 $SrcDir = "$WorkRoot\suricata-src"
 if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  cloning..."
@@ -176,8 +197,8 @@ if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  already present, skipping"
 }
 
-# ---------- Step 6: autogen + configure ----------
-Log "Step 6/9: autogen.sh + configure (WinDivert + Npcap flags)"
+# ---------- Step 7: autogen + configure ----------
+Log "Step 7/10: autogen.sh + configure (WinDivert + Npcap flags)"
 $srcUnix       = $SrcDir -replace '\\','/' -replace '^C:','/c'
 $wdIncludeUnix = $WinDivertInclude -replace '\\','/' -replace '^C:','/c'
 $wdLibUnix     = $WinDivertLib -replace '\\','/' -replace '^C:','/c'
@@ -199,16 +220,16 @@ if ($acContent -notmatch "#define WINDIVERT 1" -or $acContent -notmatch "#define
 }
 Log "  WinDivert + Npcap both confirmed detected"
 
-# ---------- Step 7: build ----------
-Log "Step 7/9: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
+# ---------- Step 8: build ----------
+Log "Step 8/10: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
 $cores = [Environment]::ProcessorCount
 & $Msys2Bash -lc "cd '$srcUnix' && make -j$cores" 2>&1 | Tee-Object -Variable makeOut | Out-Null
 $exitLine = $makeOut | Select-String "^make: \*\*\*" | Select-Object -Last 1
 if ($exitLine) { Die "make failed: $exitLine`nFull log was very long - re-run manually to see it: MSYSTEM=UCRT64 bash -lc `"cd '$srcUnix' && make -j$cores`"" }
 Log "  build completed"
 
-# ---------- Step 8: find the REAL binary + assemble deploy folder ----------
-Log "Step 8/9: locating real binary + assembling self-contained deploy folder"
+# ---------- Step 9: find the REAL binary + assemble deploy folder ----------
+Log "Step 9/10: locating real binary + assembling self-contained deploy folder"
 # GOTCHA FIXED: the top-level src/suricata.exe is a libtool WRAPPER STUB
 # (~36 KB) for a not-yet-installed binary that links against shared
 # libraries - it fails to run standalone (DLL load errors / "not
@@ -242,8 +263,8 @@ Copy-Item "$WinDivertLib\WinDivert.dll" $DeployRoot -Force
 
 Log "  deploy folder ready: $DeployRoot"
 
-# ---------- Step 9: verify ----------
-Log "Step 9/9: verify"
+# ---------- Step 10: verify ----------
+Log "Step 10/10: verify"
 Push-Location $DeployRoot
 try {
     $verOut = & ".\suricata.exe" -V 2>&1

@@ -27,6 +27,7 @@ No external installer dependency. Portable across any user account (machine-wide
 | [`Test-SuricataAlerts.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/Test-SuricataAlerts.ps1) | on-demand alert test (injects WAZUH-TEST rules, fires traffic, confirms) |
 | [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager) | **manager-side** files (see [Manager-side setup](#manager-side-setup) below) — deployed ONCE on the Wazuh manager, not per-agent |
 | [`build-suricata-ips.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/build-suricata-ips.ps1) | **experimental, separate** — builds Suricata from source with real inline IPS/blocking support (WinDivert), which the official MSI above does not have. See [Suricata IPS mode (WinDivert)](#suricata-ips-mode-windivert) below |
+| [`uninstall-all-suricata.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall-all-suricata.ps1) | removes **everything** — both the IDS install (by calling `agb-full-uninstall.ps1`) and the IPS build (deploy folder, build workspace, WinDivert driver if registered) |
 
 > **Run everything from an Administrator PowerShell** (Win+X → *Terminal (Admin)*). Both entry-point scripts declare `#Requires -RunAsAdministrator`.
 
@@ -302,13 +303,14 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
 ```
 
-**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It produces a self-contained binary + DLLs in `C:\SuricataIPS\`, for manual testing. Takes 20-60+ minutes (compiling ~250 Rust crates is the biggest cost) and needs ~5 GB free disk.
+**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a self-contained binary + DLLs in `C:\SuricataIPS\`, for manual testing. Takes 20-60+ minutes (compiling ~250 Rust crates is the biggest cost) and needs ~5 GB free disk.
 
 **What it automates** (every one of these was a real error hit and fixed during development — see the script's own inline comments for the full "why"):
 | Step | Gotcha it avoids |
 | --- | --- |
 | Windows Defender exclusion for `C:\msys64` | Defender quarantines freshly-built `cargo.exe` and the WinDivert download within seconds — both known AV false positives for build tools |
 | MSYS2 + UCRT64 toolchain install | Retries automatically — MSYS2 mirrors are frequently unstable ("Operation too slow", DNS failures); pacman resumes from cache on retry |
+| Npcap driver | Installed from scratch if missing (interactive wizard — Npcap's free build has no silent-install mode) |
 | **WinDivert 1.4.3 specifically, not the latest release (2.2.2)** | Suricata 8.0.3's C code is written against the old 1.x API — the current API is incompatible and fails with dozens of compile errors |
 | Locating the real binary | The top-level `src/suricata.exe` after a successful build is a libtool wrapper stub (~36 KB, won't run) — the real 100+ MB binary is hidden in `src/.libs/suricata.exe` |
 | Assembling runtime DLLs | This is a dynamically-linked build; needs `api-ms-win-crt-*.dll` (copied from `C:\Windows\System32\downlevel\`, not on the default search path) plus several `ucrt64/bin` libraries |
@@ -320,6 +322,12 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 4. **Test on a disposable machine first.** Inline mode sits directly in the traffic path — a crash there can affect connectivity through that interface, a materially different risk profile than IDS-only.
 
 A full narrative write-up of the entire build (including every error exactly as it happened) exists as a Word document generated during development — ask for `Suricata-IPS-Mode-Build-Guide.docx` if you need the long-form version with screenshots-equivalent detail.
+
+### Removing the IPS build (and/or everything else)
+```powershell
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-all-suricata.ps1 -UseBasicParsing | iex
+```
+Removes the IPS deploy folder (`C:\SuricataIPS\`), the build workspace (source tree, Rust cache, downloaded SDKs), and the WinDivert kernel driver if it was ever registered — **and** runs `agb-full-uninstall.ps1` for the IDS-mode install, so this one command tears down both. MSYS2 itself is kept by default (pass `-AlsoRemoveMsys2` to remove the whole toolchain, not just this project's use of it) since it's a general-purpose dev environment, not Suricata-specific.
 
 ---
 

@@ -415,6 +415,18 @@ foreach ($dll in $ucrtLibs) {
     if (Test-Path $src) { Copy-Item $src $DeployRoot -Force }
 }
 Copy-Item "$WinDivertLib\WinDivert.dll" $DeployRoot -Force
+# GOTCHA FIXED: WinDivert.dll alone is not enough - WinDivertOpen() loads
+# an actual kernel driver (WinDivert64.sys / WinDivert32.sys) from disk
+# the first time it's used, and looks for it next to the DLL. Missing this
+# produced "WinDivertOpen failed, error 2 ... driver files WinDivert32.sys
+# or WinDivert64.sys were not found" and a hard engine-init failure on the
+# very first --windivert test run, despite the build itself having
+# succeeded (WinDivert enabled: yes in --build-info only confirms it was
+# compiled in, not that the runtime driver is present).
+foreach ($sys in @("WinDivert64.sys", "WinDivert32.sys")) {
+    $src = "$WinDivertLib\$sys"
+    if (Test-Path $src) { Copy-Item $src $DeployRoot -Force }
+}
 # wpcap.dll itself is intentionally NOT copied - it resolves from the
 # system-wide Npcap driver installation, which must already be present.
 
@@ -493,6 +505,18 @@ if (-not $SkipRulesSetup) {
         $y = Set-YamlKeyIps $y 'default-log-dir'   ("'{0}'" -f $LogDir)
         $y = Set-YamlKeyIps $y 'default-rule-path' ("'{0}'" -f $RuleDir)
         if ($HomeNet) { $y = Set-YamlKeyIps $y 'HOME_NET' ('"{0}"' -f $HomeNet) }
+        # GOTCHA FIXED: the stock yaml points classification-file/
+        # reference-config-file at the official MSI's install path
+        # (C:\Program Files\Suricata\...), which doesn't exist for this
+        # standalone build - produced hard "could not open" errors on
+        # every startup (non-fatal, but noisy and worth fixing since the
+        # source files are right there in the build tree already).
+        foreach ($cfgFile in @('classification.config', 'reference.config')) {
+            $src = "$SrcDir\etc\$cfgFile"
+            if (Test-Path $src) { Copy-Item $src $DeployRoot -Force }
+        }
+        $y = Set-YamlKeyIps $y 'classification-file'    ("'{0}\classification.config'" -f $DeployRoot)
+        $y = Set-YamlKeyIps $y 'reference-config-file'  ("'{0}\reference.config'" -f $DeployRoot)
         # rule-files -> ET Open (alert) + agb-black-drop (drop)
         $ylines = $y -split "`r?`n"
         $rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }

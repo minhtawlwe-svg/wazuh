@@ -150,7 +150,7 @@ if ($SelectedAdapter) {
 # unsigned, compiled from source, linked against a packet-interception
 # driver) is exactly the profile Defender flags, and it lives OUTSIDE
 # C:\msys64 entirely.
-Log "Step 0/12: Windows Defender exclusions"
+Log "Step 0/13: Windows Defender exclusions"
 # GOTCHA FIXED: on machines with Tamper Protection ON, Add-MpPreference
 # silently fails to actually enforce exclusion changes - Defender
 # deliberately ignores/reverts exclusion edits made via PowerShell (or any
@@ -204,7 +204,7 @@ foreach ($exPath in @('C:\msys64', $DeployRoot)) {
 }
 
 # ---------- Step 1: MSYS2 ----------
-Log "Step 1/12: MSYS2 base install"
+Log "Step 1/13: MSYS2 base install"
 if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
     $tmp = "$env:TEMP\msys2-base.sfx.exe"
     Log "  downloading MSYS2 base archive..."
@@ -232,7 +232,7 @@ if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
 }
 
 # ---------- Step 2: build dependencies via pacman ----------
-Log "Step 2/12: build dependencies (this can take a while + may need retries - see gotcha)"
+Log "Step 2/13: build dependencies (this can take a while + may need retries - see gotcha)"
 if (-not $SkipPackageInstall) {
     # GOTCHA FIXED: several MSYS2 mirrors were unstable during this build
     # ("Operation too slow" / DNS resolution failures for specific mirrors).
@@ -282,7 +282,7 @@ if (-not $SkipPackageInstall) {
 }
 
 # ---------- Step 3: Npcap DRIVER (not just the SDK - the built binary needs this at runtime) ----------
-Log "Step 3/12: Npcap driver"
+Log "Step 3/13: Npcap driver"
 if (-not $SkipNpcap) {
     $hasNpcap = (Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap')
     if ($hasNpcap) {
@@ -304,7 +304,7 @@ if (-not $SkipNpcap) {
 }
 
 # ---------- Step 4: WinDivert 1.4.3 (NOT the latest version - see gotcha) ----------
-Log "Step 4/12: WinDivert 1.4.3"
+Log "Step 4/13: WinDivert 1.4.3"
 # GOTCHA FIXED: Suricata 8.0.3's source-windivert.c is written against the
 # OLD WinDivert 1.x API. The current WinDivert release (2.2.2) has a
 # materially different, incompatible API and will compile-fail with dozens
@@ -327,7 +327,7 @@ $WinDivertInclude = "$WorkRoot\WinDivert-1.4.3-A\include"
 $WinDivertLib     = "$WorkRoot\WinDivert-1.4.3-A\x86_64"
 
 # ---------- Step 5: Npcap SDK ----------
-Log "Step 5/12: Npcap SDK (headers/libs for linking)"
+Log "Step 5/13: Npcap SDK (headers/libs for linking)"
 if (-not (Test-Path "$WorkRoot\npcap-sdk\Include\pcap.h")) {
     $npcapZip = "$WorkRoot\npcap-sdk-1.15.zip"
     Log "  downloading Npcap SDK..."
@@ -345,7 +345,7 @@ $NpcapInclude = "$WorkRoot\npcap-sdk\Include"
 $NpcapLib     = "$WorkRoot\npcap-sdk\Lib\x64"
 
 # ---------- Step 6: Suricata source ----------
-Log "Step 6/12: Suricata source ($SuricataVersion)"
+Log "Step 6/13: Suricata source ($SuricataVersion)"
 $SrcDir = "$WorkRoot\suricata-src"
 if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  cloning..."
@@ -355,8 +355,38 @@ if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  already present, skipping"
 }
 
-# ---------- Step 7: autogen + configure ----------
-Log "Step 7/12: autogen.sh + configure (WinDivert + Npcap flags)"
+# ---------- Step 7: patch a real upstream bug - WinDivert never marks IPS mode ----------
+Log "Step 7/13: patching known upstream bug (WinDivert eve.json action field)"
+# GOTCHA FIXED: confirmed by reading Suricata's own source (not guessed).
+# eve.json's alert.action field is computed in src/output-json-alert.c:
+#   } else if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) { action = "blocked"; }
+# EngineModeIsIPS() is set true by EVERY OTHER inline runmode (NFQ/-q,
+# IPFW/-d, af-packet, netmap, dpdk each call EngineModeSetIPS() from their
+# own CLI-option or runmode-init code in src/suricata.c /
+# src/runmode-*.c) - but grep confirms src/runmode-windivert.c and both
+# --windivert / --windivert-forward branches in src/suricata.c never call
+# it at all. So under WinDivert, EngineModeIsIPS() stays false forever,
+# and eve.json reports "allowed" even when a rule's `drop` action DID
+# fire and the packet WAS dropped (confirmed independently via fast.log's
+# accurate "[wDrop]" tag and a real blocked connection during testing).
+# This is a genuine gap in Suricata 8.0.3's own WinDivert support, not a
+# config issue - the only fix is patching the two call sites to match
+# every other IPS runmode, then rebuilding.
+$suricataC = "$SrcDir\src\suricata.c"
+$scContent = Get-Content $suricataC -Raw
+if ($scContent -match [regex]::Escape("suri->run_mode = RUNMODE_WINDIVERT;`n                    EngineModeSetIPS();")) {
+    Log "  already patched, skipping"
+} elseif ($scContent -match [regex]::Escape("suri->run_mode = RUNMODE_WINDIVERT;")) {
+    $patched = $scContent -replace [regex]::Escape("suri->run_mode = RUNMODE_WINDIVERT;"), "suri->run_mode = RUNMODE_WINDIVERT;`n                    EngineModeSetIPS();"
+    [IO.File]::WriteAllText($suricataC, $patched, (New-Object Text.UTF8Encoding($false)))
+    $count = ([regex]::Matches($patched, [regex]::Escape("RUNMODE_WINDIVERT;`n                    EngineModeSetIPS();"))).Count
+    Log "  patched suricata.c ($count call site(s) added - matches the --windivert and --windivert-forward branches)"
+} else {
+    Warn "  expected RUNMODE_WINDIVERT assignment not found in suricata.c - Suricata's source may have changed upstream; eve.json action field will likely still say 'allowed' for dropped packets even though real blocking works (see fast.log)"
+}
+
+# ---------- Step 8: autogen + configure ----------
+Log "Step 8/13: autogen.sh + configure (WinDivert + Npcap flags)"
 $srcUnix       = $SrcDir -replace '\\','/' -replace '^C:','/c'
 $wdIncludeUnix = $WinDivertInclude -replace '\\','/' -replace '^C:','/c'
 $wdLibUnix     = $WinDivertLib -replace '\\','/' -replace '^C:','/c'
@@ -378,7 +408,7 @@ if ($acContent -notmatch "#define WINDIVERT 1" -or $acContent -notmatch "#define
 Log "  WinDivert + Npcap both confirmed detected"
 
 # ---------- Step 8: build ----------
-Log "Step 8/12: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
+Log "Step 9/13: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
 $cores = [Environment]::ProcessorCount
 $makeOut = Invoke-Bash "cd '$srcUnix' && make -j$cores"
 $exitLine = $makeOut | Select-String "^make: \*\*\*" | Select-Object -Last 1
@@ -386,7 +416,7 @@ if ($exitLine) { Die "make failed: $exitLine`nFull log was very long - re-run ma
 Log "  build completed"
 
 # ---------- Step 9: find the REAL binary + assemble deploy folder ----------
-Log "Step 9/12: locating real binary + assembling self-contained deploy folder"
+Log "Step 10/13: locating real binary + assembling self-contained deploy folder"
 # GOTCHA FIXED: the top-level src/suricata.exe is a libtool WRAPPER STUB
 # (~36 KB) for a not-yet-installed binary that links against shared
 # libraries - it fails to run standalone (DLL load errors / "not
@@ -472,7 +502,7 @@ function Get-AgbBlackDropRuleset([string]$destPath) {
 }
 
 # ---------- Step 10: config + rules (ET Open = alert, agb-black.rules = drop) ----------
-Log "Step 10/12: suricata.yaml + rules (ET Open stays alert-only, agb-black.rules converted to drop)"
+Log "Step 11/13: suricata.yaml + rules (ET Open stays alert-only, agb-black.rules converted to drop)"
 if (-not $SkipRulesSetup) {
     $RuleDir = "$DeployRoot\rules"
     $LogDir  = "$DeployRoot\log"
@@ -562,7 +592,7 @@ if (-not $SkipRulesSetup) {
 }
 
 # ---------- Step 11: daily scheduled tasks (keep ET Open + agb-black.rules current) ----------
-Log "Step 11/12: daily rule refresh scheduled tasks"
+Log "Step 12/13: daily rule refresh scheduled tasks"
 if (-not $SkipScheduledTask -and (Test-Path "$DeployRoot\suricata.yaml")) {
     # No Windows service is registered for the IPS build (it's meant to be
     # run interactively per-test, not continuously in the background - see
@@ -629,7 +659,7 @@ try {
 }
 
 # ---------- Step 12: verify ----------
-Log "Step 12/12: verify"
+Log "Step 13/13: verify"
 Push-Location $DeployRoot
 try {
     $verOut = & ".\suricata.exe" -V 2>&1

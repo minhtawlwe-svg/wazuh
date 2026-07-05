@@ -453,9 +453,27 @@ Copy-Item "$WinDivertLib\WinDivert.dll" $DeployRoot -Force
 # very first --windivert test run, despite the build itself having
 # succeeded (WinDivert enabled: yes in --build-info only confirms it was
 # compiled in, not that the runtime driver is present).
+# GOTCHA FIXED: if a previous test run's suricata.exe used --windivert,
+# the WinDivert1.4 kernel driver stays LOADED (State: Running) even after
+# that process exits - Windows locks a .sys file while its driver is
+# loaded, so overwriting it on a rebuild fails with "The process cannot
+# access the file ... because it is being used by another process." Found
+# via `driverquery /v` - it does NOT show up under Get-Service (it's a
+# raw kernel driver, not a normal SCM-visible service), so a Get-Service
+# check alone would miss it. Stop it first if present; harmless no-op if
+# no prior test ever ran.
+foreach ($svcName in @("WinDivert1.4", "WinDivert1.2", "WinDivert")) {
+    try { & sc.exe stop $svcName 2>&1 | Out-Null; Start-Sleep -Milliseconds 500 } catch {}
+}
 foreach ($sys in @("WinDivert64.sys", "WinDivert32.sys")) {
     $src = "$WinDivertLib\$sys"
-    if (Test-Path $src) { Copy-Item $src $DeployRoot -Force }
+    if (Test-Path $src) {
+        try {
+            Copy-Item $src $DeployRoot -Force -ErrorAction Stop
+        } catch {
+            Die "Could not copy $sys - it's likely still locked by a running suricata.exe or its kernel driver. Close any window still running '.\suricata.exe ... --windivert' first, or run 'sc.exe stop WinDivert1.4' (elevated) manually, then re-run this script."
+        }
+    }
 }
 # wpcap.dll itself is intentionally NOT copied - it resolves from the
 # system-wide Npcap driver installation, which must already be present.

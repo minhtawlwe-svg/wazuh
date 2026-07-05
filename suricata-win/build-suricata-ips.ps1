@@ -470,8 +470,14 @@ if (-not $SkipRulesSetup) {
     # fall back to the existing IDS install's copy if present (same repo,
     # already known-good), fail clearly if neither exists rather than
     # silently skipping config setup.
+    # GOTCHA FIXED: the autotools-substituted suricata.yaml (from
+    # suricata.yaml.in via AC_CONFIG_FILES) lands at the TOP LEVEL of the
+    # source tree (src root, alongside suricata.yaml.in), not under etc/ -
+    # etc/ only has classification.config/reference.config/schema.json/
+    # logrotate/service files. Checking the wrong path silently skipped
+    # rules setup entirely on the first real end-to-end run.
     $yamlSrc = $null
-    foreach ($candidate in @("$SrcDir\etc\suricata.yaml", "C:\Program Files\Suricata\suricata.yaml")) {
+    foreach ($candidate in @("$SrcDir\suricata.yaml", "$SrcDir\etc\suricata.yaml", "C:\Program Files\Suricata\suricata.yaml")) {
         if (Test-Path $candidate) { $yamlSrc = $candidate; break }
     }
     if (-not $yamlSrc) {

@@ -96,19 +96,25 @@ if ($SelectedAdapter) {
     Warn "no capture adapter resolved - WinDivert's own filter language can still scope by ifIdx manually later if needed"
 }
 
-# ---------- Step 0: Windows Defender exclusion (REQUIRED - see gotcha below) ----------
+# ---------- Step 0: Windows Defender exclusions (REQUIRED - see gotcha below) ----------
 # GOTCHA FIXED: Windows Defender repeatedly quarantined freshly-built/downloaded
 # files during this build (Rust's cargo.exe after every reinstall, and the
 # WinDivert release zip) - both known AV false-positive targets. Without this
 # exclusion, cargo.exe gets silently deleted within seconds of every install,
 # causing confusing "file not found" errors on the very next command. This
 # must happen BEFORE installing the rust package or downloading WinDivert.
-Log "Step 0/12: Windows Defender exclusion for C:\msys64"
-try {
-    Add-MpPreference -ExclusionPath 'C:\msys64' -ErrorAction Stop
-    Log "  exclusion added"
-} catch {
-    Warn "Could not add Defender exclusion ($($_.Exception.Message)). If cargo.exe or WinDivert.zip vanish moments after being written later in this script, add manually: Add-MpPreference -ExclusionPath 'C:\msys64'"
+# $DeployRoot needs its own exclusion too - the final suricata.exe (112+ MB,
+# unsigned, compiled from source, linked against a packet-interception
+# driver) is exactly the profile Defender flags, and it lives OUTSIDE
+# C:\msys64 entirely.
+Log "Step 0/12: Windows Defender exclusions"
+foreach ($exPath in @('C:\msys64', $DeployRoot)) {
+    try {
+        Add-MpPreference -ExclusionPath $exPath -ErrorAction Stop
+        Log "  exclusion added: $exPath"
+    } catch {
+        Warn "Could not add Defender exclusion for $exPath ($($_.Exception.Message)). If files vanish moments after being written later in this script, add manually: Add-MpPreference -ExclusionPath '$exPath'"
+    }
 }
 
 # ---------- Step 1: MSYS2 ----------

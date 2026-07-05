@@ -111,10 +111,24 @@ Log "Step 0/12: Windows Defender exclusions"
 foreach ($exPath in @('C:\msys64', $DeployRoot)) {
     try {
         Add-MpPreference -ExclusionPath $exPath -ErrorAction Stop
-        Log "  exclusion added: $exPath"
     } catch {
         Warn "Could not add Defender exclusion for $exPath ($($_.Exception.Message)). If files vanish moments after being written later in this script, add manually: Add-MpPreference -ExclusionPath '$exPath'"
+        continue
     }
+    # GOTCHA FIXED: Add-MpPreference can report success instantly while
+    # Defender's real-time protection engine takes a moment to actually
+    # pick up the new exclusion internally - a file written in that gap
+    # still gets scanned (and potentially quarantined) as if unexcluded.
+    # Poll until the path is confirmed present in the live exclusion list
+    # before trusting it, instead of a fixed sleep or no wait at all.
+    $confirmed = $false
+    for ($i = 0; $i -lt 10; $i++) {
+        $current = (Get-MpPreference -ErrorAction SilentlyContinue).ExclusionPath
+        if ($current -contains $exPath) { $confirmed = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($confirmed) { Log "  exclusion added and confirmed active: $exPath" }
+    else { Warn "  exclusion for $exPath was added but not yet confirmed active after 5s - proceeding anyway, but AV quarantine is still possible for the next few seconds" }
 }
 
 # ---------- Step 1: MSYS2 ----------

@@ -61,6 +61,14 @@ try {
 
 Write-Host "`n===== PART 2/2: Experimental IPS (WinDivert) build =====" -ForegroundColor Green
 
+# ---------- 0. daily rule-refresh scheduled tasks ----------
+foreach ($taskName in @("AGB-Suricata-IPS-ET-Refresh", "AGB-Suricata-IPS-Rules-Deploy")) {
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Act "remove scheduled task '$taskName'"
+        if (-not $WhatIfOnly) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
+    }
+}
+
 # ---------- 1. WinDivert kernel driver, if it was ever registered ----------
 # WinDivert self-installs a kernel driver the FIRST time --windivert is
 # actually run (not just built) - typically registered as service name
@@ -126,6 +134,7 @@ Write-Host ""
 Log "================ POST-CLEAN STATE ================"
 "  IPS deploy folder ($DeployRoot)     : " + (Test-Path $DeployRoot)
 "  IPS build workspace                 : " + (Test-Path $IpsWorkRoot)
+"  IPS scheduled tasks remaining       : " + ((@("AGB-Suricata-IPS-ET-Refresh","AGB-Suricata-IPS-Rules-Deploy") | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }) -join ', ')
 "  MSYS2 (C:\msys64) kept              : " + (Test-Path 'C:\msys64')
 "  WinDivert driver services remaining : " + ((@("WinDivert","WinDivert1.4","WinDivert1.2") | Where-Object { Get-Service -Name $_ -ErrorAction SilentlyContinue }) -join ', ')
 "  Npcap kept                          : " + [bool](Get-Service npcap -ErrorAction SilentlyContinue)

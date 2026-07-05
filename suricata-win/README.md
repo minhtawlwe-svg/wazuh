@@ -303,20 +303,28 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
 ```
 
-**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a **ready-to-test** deployment in `C:\SuricataIPS\`: the binary, all runtime DLLs, a configured `suricata.yaml`, and a merged rules file. Takes 20-60+ minutes (compiling ~250 Rust crates is the biggest cost) and needs ~5 GB free disk.
+**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a **ready-to-test** deployment in `C:\SuricataIPS\`: the binary, all runtime DLLs, a configured `suricata.yaml`, and rules. **Interactive by default** — prompts for capture interface and HOME_NET, same UX as `agb-full-setup.ps1` (pass `-NoPrompt` to auto-pick everything). Takes 20-60+ minutes (compiling ~250 Rust crates is the biggest cost) and needs ~5 GB free disk.
 
 **What it automates** (every one of these was a real error hit and fixed during development — see the script's own inline comments for the full "why"):
 | Step | Gotcha it avoids |
 | --- | --- |
 | Windows Defender exclusion for `C:\msys64` | Defender quarantines freshly-built `cargo.exe` and the WinDivert download within seconds — both known AV false positives for build tools |
 | MSYS2 + UCRT64 toolchain install | Retries automatically — MSYS2 mirrors are frequently unstable ("Operation too slow", DNS failures); pacman resumes from cache on retry |
+| Every bash invocation | Wrapped so a native command's harmless *stderr* text (e.g. pacman's own "is up to date -- reinstalling" notice) doesn't get turned into a fatal PowerShell error under `$ErrorActionPreference='Stop'` — a real bug hit and fixed during development |
 | Npcap driver | Installed from scratch if missing (interactive wizard — Npcap's free build has no silent-install mode) |
 | **WinDivert 1.4.3 specifically, not the latest release (2.2.2)** | Suricata 8.0.3's C code is written against the old 1.x API — the current API is incompatible and fails with dozens of compile errors |
 | Locating the real binary | The top-level `src/suricata.exe` after a successful build is a libtool wrapper stub (~36 KB, won't run) — the real 100+ MB binary is hidden in `src/.libs/suricata.exe` |
 | Assembling runtime DLLs | This is a dynamically-linked build; needs `api-ms-win-crt-*.dll` (copied from `C:\Windows\System32\downlevel\`, not on the default search path) plus several `ucrt64/bin` libraries |
-| `suricata.yaml` + rules | Downloads the ET Open ruleset + `agb-black.rules`, merges them, and rewrites every rule's action from `alert` to `drop` — an `alert` rule still only *logs*, even under WinDivert; only `drop` actually blocks |
+| `suricata.yaml` + rules | Generates a working config; see the split below |
+| Daily rule refresh | Two scheduled tasks keep both rule files current, same timing as the IDS deployment |
 
-**⚠️ The full ET Open ruleset (~50,000 signatures) is converted to `drop` by this script.** Most of those signatures are tuned for *alerting*, not blocking — many are noisy/informational and will false-positive on legitimate traffic. This is exactly why real production IPS deployments curate a small, high-confidence subset for blocking rather than converting an entire IDS ruleset wholesale. The script prints a loud warning about this before generating the rules; **do not** run the test command below with a broad filter (`true` = capture everything) until you've confirmed narrow blocking works correctly and understand this risk.
+**Rules are deliberately split — only your curated blacklist actually blocks:**
+| File | Source | Action | Effect |
+| --- | --- | --- | --- |
+| `rules\suricata.rules` | Full ET Open ruleset (~50,000 signatures) | `alert` (unmodified) | Visibility only — logs, never blocks. Most ET signatures are tuned for alerting, not blocking; converting the entire IDS ruleset to blocking would be genuinely risky (noisy/informational signatures false-positiving on legitimate traffic) |
+| `rules\agb-black-drop.rules` | Your `agb-black.rules` (same blacklist the IDS deployment auto-kills on) | `drop` (converted from `alert`) | **Actually blocks** — the same small, deliberate, already-trusted IOC set, now enforced inline instead of via the Wazuh Active Response round-trip |
+
+Both refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, `AGB-Suricata-IPS-Rules-Deploy` at 1:30 PM — same times as the IDS deployment's equivalents). Since the IPS build isn't registered as a running service, these tasks just keep the rule files current on disk; there's no process to restart.
 
 **What's still manual after the script finishes:**
 1. **Test with a narrow filter first** (Administrator, interactive — WinDivert installs a kernel driver on first use, so run this yourself, not unattended):
@@ -326,7 +334,7 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
    ```
    (substitute your own test C2 IP — this narrow filter only intercepts traffic to that one address, not your whole connection)
 2. **Test on a disposable machine first**, not this laptop or any production agent. Inline mode sits directly in the traffic path — a crash there can affect connectivity through that interface, a materially different risk profile than IDS-only.
-3. Pass `-SkipRulesSetup` if you only want the bare binary (e.g. to write your own curated rule set instead of the full ET Open conversion).
+3. Pass `-SkipRulesSetup` if you only want the bare binary (e.g. to write your own curated rule set instead), or `-SkipScheduledTask` to skip just the daily refresh tasks.
 
 A full narrative write-up of the entire build (including every error exactly as it happened) exists as a Word document generated during development — ask for `Suricata-IPS-Mode-Build-Guide.docx` if you need the long-form version with screenshots-equivalent detail.
 

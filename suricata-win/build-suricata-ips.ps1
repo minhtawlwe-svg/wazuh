@@ -14,24 +14,34 @@
 # This is a SEPARATE, EXPERIMENTAL build - it does not touch or replace the
 # existing IDS-mode Suricata install. Output lands in a standalone deploy
 # folder for manual testing. See Suricata-IPS-Mode-Build-Guide.docx for the
-# full narrative writeup (every error hit and why), or the "GOTCHAS FIXED
-# BY THIS SCRIPT" comment blocks below for the condensed version.
+# full narrative writeup (every error hit and why), or the "GOTCHA FIXED"
+# comment blocks below for the condensed version.
 #
 # Requirements: Administrator PowerShell, ~5 GB free disk, internet access.
 # Takes 20-60+ minutes depending on connection/CPU (largest cost: compiling
 # ~250 Rust crates for Suricata's rust/ subsystem, plus the C source tree).
+#
+# INTERACTIVE by default - prompts for capture interface and HOME_NET (press
+# Enter on either to auto-pick/keep the stock default), matching
+# agb-full-setup.ps1's UX. Pass -NoPrompt to skip both and auto-pick
+# everything, or -CaptureInterfaceName/-HomeNet to pre-supply either value
+# non-interactively (piping via | iex can't pass parameters - download the
+# script first if you need this).
 # ============================================================================
 [CmdletBinding()]
 param(
-    [string]$SuricataVersion = "suricata-8.0.3",     # git tag to build
-    [string]$WorkRoot        = "C:\msys64\home\$env:USERNAME\suricata-ips-build",
-    [string]$DeployRoot      = "C:\SuricataIPS",       # final self-contained output
-    [string]$NpcapUrl        = "https://npcap.com/dist/npcap-1.82.exe",
-    [string]$HomeNet         = "",                     # blank = keep stock RFC1918
-    [switch]$SkipMsys2Install,                          # if MSYS2 already installed
-    [switch]$SkipPackageInstall,                       # if deps already installed
-    [switch]$SkipNpcap,                                # if the Npcap DRIVER is already installed
-    [switch]$SkipRulesSetup                            # skip Step 10 - leaves just the bare binary, no yaml/rules
+    [string]$SuricataVersion      = "suricata-8.0.3",     # git tag to build
+    [string]$WorkRoot             = "C:\msys64\home\$env:USERNAME\suricata-ips-build",
+    [string]$DeployRoot           = "C:\SuricataIPS",       # final self-contained output
+    [string]$NpcapUrl             = "https://npcap.com/dist/npcap-1.82.exe",
+    [string]$HomeNet              = "",                     # blank = keep stock RFC1918
+    [string]$CaptureInterfaceName = "",                     # blank = auto-pick fastest UP adapter
+    [switch]$NoPrompt,                                     # skip both interactive prompts
+    [switch]$SkipMsys2Install,                              # if MSYS2 already installed
+    [switch]$SkipPackageInstall,                           # if deps already installed
+    [switch]$SkipNpcap,                                    # if the Npcap DRIVER is already installed
+    [switch]$SkipRulesSetup,                               # skip Step 10 - leaves just the bare binary, no yaml/rules
+    [switch]$SkipScheduledTask                             # skip Step 11 - no daily rule refresh
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +51,50 @@ function Warn($m) { Write-Host "[ips-build] WARN: $m" -ForegroundColor Yellow }
 function Die($m)  { Write-Host "[ips-build] FATAL: $m" -ForegroundColor Red; exit 1 }
 
 $Msys2Bash = "C:\msys64\usr\bin\bash.exe"
-$Bash = { param($cmd) & $Msys2Bash -lc $cmd }
+
+# GOTCHA FIXED: with $ErrorActionPreference='Stop' at script scope, calling a
+# native executable that writes ANYTHING to stderr (even a harmless status
+# line, e.g. pacman's own "is up to date -- reinstalling" notice) gets
+# converted into a terminating NativeCommandError and kills the whole
+# script - even though the command's real exit code was 0/success. Every
+# bash invocation goes through this helper instead, which temporarily
+# relaxes that preference and checks $LASTEXITCODE explicitly where it
+# actually matters, rather than treating any stderr text as fatal.
+function Invoke-Bash([string]$cmd) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Msys2Bash -lc $cmd 2>&1
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    return $out
+}
+
+# ---------- Interactive prompts (ask when not supplied on the command line) ----------
+if (-not $NoPrompt -and -not $CaptureInterfaceName) {
+    Write-Host "`nAvailable physical network adapters that are UP:" -ForegroundColor Cyan
+    Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } |
+        Format-Table -AutoSize Name, InterfaceDescription, LinkSpeed | Out-Host
+    $ans = Read-Host "Capture interface name (press Enter to auto-pick the fastest UP adapter)"
+    if ($ans) { $CaptureInterfaceName = $ans.Trim() }
+}
+if (-not $NoPrompt -and -not $HomeNet) {
+    Write-Host "`nHOME_NET defines your local networks (rules fire EXTERNAL -> HOME_NET)." -ForegroundColor Cyan
+    $ans = Read-Host "HOME_NET, e.g. [192.168.1.0/24]  (press Enter to keep stock RFC1918)"
+    if ($ans) { $HomeNet = $ans.Trim() }
+}
+if ($CaptureInterfaceName) {
+    $SelectedAdapter = Get-NetAdapter -Name $CaptureInterfaceName -ErrorAction SilentlyContinue
+} else {
+    $ex = '(?i)(virtual|vmware|virtualbox|hyper-v|veth|loopback|npcap loopback|wi-fi direct|bluetooth|tap|tun|wireguard|zerotier|tailscale|hamachi|isatap|teredo)'
+    $SelectedAdapter = Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.Name -notmatch $ex -and $_.InterfaceDescription -notmatch $ex } | Sort-Object LinkSpeed -Descending | Select-Object -First 1
+}
+if ($SelectedAdapter) {
+    Log "capture interface: $($SelectedAdapter.Name) (ifIndex $($SelectedAdapter.ifIndex)) - $($SelectedAdapter.InterfaceDescription)"
+} else {
+    Warn "no capture adapter resolved - WinDivert's own filter language can still scope by ifIdx manually later if needed"
+}
 
 # ---------- Step 0: Windows Defender exclusion (REQUIRED - see gotcha below) ----------
 # GOTCHA FIXED: Windows Defender repeatedly quarantined freshly-built/downloaded
@@ -50,7 +103,7 @@ $Bash = { param($cmd) & $Msys2Bash -lc $cmd }
 # exclusion, cargo.exe gets silently deleted within seconds of every install,
 # causing confusing "file not found" errors on the very next command. This
 # must happen BEFORE installing the rust package or downloading WinDivert.
-Log "Step 0/11: Windows Defender exclusion for C:\msys64"
+Log "Step 0/12: Windows Defender exclusion for C:\msys64"
 try {
     Add-MpPreference -ExclusionPath 'C:\msys64' -ErrorAction Stop
     Log "  exclusion added"
@@ -59,7 +112,7 @@ try {
 }
 
 # ---------- Step 1: MSYS2 ----------
-Log "Step 1/11: MSYS2 base install"
+Log "Step 1/12: MSYS2 base install"
 if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
     $tmp = "$env:TEMP\msys2-base.sfx.exe"
     Log "  downloading MSYS2 base archive..."
@@ -80,29 +133,29 @@ if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
     & $tmp -y -oC:\ | Out-Null
     if (-not (Test-Path $Msys2Bash)) { Die "MSYS2 extraction did not produce $Msys2Bash" }
     Log "  first-run initialization..."
-    & $Bash "echo done" | Out-Null
+    Invoke-Bash "echo done" | Out-Null
     Log "  MSYS2 installed"
 } else {
     Log "  already present, skipping"
 }
 
 # ---------- Step 2: build dependencies via pacman ----------
-Log "Step 2/11: build dependencies (this can take a while + may need retries - see gotcha)"
+Log "Step 2/12: build dependencies (this can take a while + may need retries - see gotcha)"
 if (-not $SkipPackageInstall) {
     # GOTCHA FIXED: several MSYS2 mirrors were unstable during this build
     # ("Operation too slow" / DNS resolution failures for specific mirrors).
     # pacman resumes from its local package cache on retry, so simply
     # re-running the same install command after a mirror failure works -
     # each retry needs less data than the last. Retry up to 5 times.
-    & $Bash "sed -i 's/^ParallelDownloads.*/ParallelDownloads = 2/' /etc/pacman.conf" | Out-Null
-    & $Bash "pacman -Syu --noconfirm" | Out-Null
+    Invoke-Bash "sed -i 's/^ParallelDownloads.*/ParallelDownloads = 2/' /etc/pacman.conf" | Out-Null
+    Invoke-Bash "pacman -Syu --noconfirm" | Out-Null
     $pkgs = "autoconf automake git make mingw-w64-ucrt-x86_64-cbindgen mingw-w64-ucrt-x86_64-jansson " +
             "mingw-w64-ucrt-x86_64-libpcap mingw-w64-ucrt-x86_64-libtool mingw-w64-ucrt-x86_64-libyaml " +
             "mingw-w64-ucrt-x86_64-pcre2 mingw-w64-ucrt-x86_64-rust mingw-w64-ucrt-x86_64-toolchain unzip"
     $ok = $false
     for ($i = 1; $i -le 5; $i++) {
         Log "  pacman install attempt $i/5..."
-        & $Bash "pacman -S --noconfirm $pkgs" 2>&1 | Tee-Object -Variable pacmanOut | Out-Null
+        $pacmanOut = Invoke-Bash "pacman -S --noconfirm $pkgs"
         if ($pacmanOut -notmatch "error: failed to commit transaction") { $ok = $true; break }
         Warn "  mirror error(s) hit, retrying (pacman resumes from cache)..."
     }
@@ -113,11 +166,12 @@ if (-not $SkipPackageInstall) {
     # runs; if not, the Step 0 exclusion likely didn't take effect in time -
     # reinstall just the rust package once more now that it's excluded.
     $cargoOk = $false
-    try { & $Bash "cargo --version" 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $cargoOk = $true } } catch {}
+    Invoke-Bash "cargo --version" | Out-Null
+    if ($LASTEXITCODE -eq 0) { $cargoOk = $true }
     if (-not $cargoOk) {
         Warn "  cargo.exe missing/broken (likely AV quarantine) - reinstalling rust package"
-        & $Bash "pacman -S --noconfirm mingw-w64-ucrt-x86_64-rust" | Out-Null
-        & $Bash "cargo --version" 2>&1 | Out-Null
+        Invoke-Bash "pacman -S --noconfirm mingw-w64-ucrt-x86_64-rust" | Out-Null
+        Invoke-Bash "cargo --version" | Out-Null
         if ($LASTEXITCODE -ne 0) { Die "cargo still not working after reinstall - check the Defender exclusion from Step 0 manually: Add-MpPreference -ExclusionPath 'C:\msys64'" }
     }
     Log "  dependencies installed and verified"
@@ -126,7 +180,7 @@ if (-not $SkipPackageInstall) {
 }
 
 # ---------- Step 3: Npcap DRIVER (not just the SDK - the built binary needs this at runtime) ----------
-Log "Step 3/11: Npcap driver"
+Log "Step 3/12: Npcap driver"
 if (-not $SkipNpcap) {
     $hasNpcap = (Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap')
     if ($hasNpcap) {
@@ -148,7 +202,7 @@ if (-not $SkipNpcap) {
 }
 
 # ---------- Step 4: WinDivert 1.4.3 (NOT the latest version - see gotcha) ----------
-Log "Step 4/11: WinDivert 1.4.3"
+Log "Step 4/12: WinDivert 1.4.3"
 # GOTCHA FIXED: Suricata 8.0.3's source-windivert.c is written against the
 # OLD WinDivert 1.x API. The current WinDivert release (2.2.2) has a
 # materially different, incompatible API and will compile-fail with dozens
@@ -156,7 +210,7 @@ Log "Step 4/11: WinDivert 1.4.3"
 # members, wrong argument counts). WinDivert 1.4.3 is what Suricata's own
 # GitHub Actions CI pipeline uses to test this feature - use that exact
 # version, not "latest".
-& $Msys2Bash -lc "mkdir -p '$($WorkRoot -replace '\\','/')'" | Out-Null
+Invoke-Bash "mkdir -p '$($WorkRoot -replace '\\','/')'" | Out-Null
 $wdZip = "$WorkRoot\WinDivert-1.4.3-A.zip"
 if (-not (Test-Path "$WorkRoot\WinDivert-1.4.3-A\include\windivert.h")) {
     Log "  downloading WinDivert 1.4.3..."
@@ -167,11 +221,11 @@ if (-not (Test-Path "$WorkRoot\WinDivert-1.4.3-A\include\windivert.h")) {
 } else {
     Log "  already present, skipping"
 }
-$WinDivertInclude   = "$WorkRoot\WinDivert-1.4.3-A\include"
-$WinDivertLib       = "$WorkRoot\WinDivert-1.4.3-A\x86_64"
+$WinDivertInclude = "$WorkRoot\WinDivert-1.4.3-A\include"
+$WinDivertLib     = "$WorkRoot\WinDivert-1.4.3-A\x86_64"
 
 # ---------- Step 5: Npcap SDK ----------
-Log "Step 5/11: Npcap SDK (headers/libs for linking)"
+Log "Step 5/12: Npcap SDK (headers/libs for linking)"
 if (-not (Test-Path "$WorkRoot\npcap-sdk\Include\pcap.h")) {
     $npcapZip = "$WorkRoot\npcap-sdk-1.15.zip"
     Log "  downloading Npcap SDK..."
@@ -189,18 +243,18 @@ $NpcapInclude = "$WorkRoot\npcap-sdk\Include"
 $NpcapLib     = "$WorkRoot\npcap-sdk\Lib\x64"
 
 # ---------- Step 6: Suricata source ----------
-Log "Step 6/11: Suricata source ($SuricataVersion)"
+Log "Step 6/12: Suricata source ($SuricataVersion)"
 $SrcDir = "$WorkRoot\suricata-src"
 if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  cloning..."
-    & $Msys2Bash -lc "git clone --branch $SuricataVersion --depth 1 https://github.com/OISF/suricata.git '$($SrcDir -replace '\\','/')'" 2>&1 | Out-Null
+    Invoke-Bash "git clone --branch $SuricataVersion --depth 1 https://github.com/OISF/suricata.git '$($SrcDir -replace '\\','/')'" | Out-Null
     if (-not (Test-Path "$SrcDir\configure.ac")) { Die "Suricata source clone failed" }
 } else {
     Log "  already present, skipping"
 }
 
 # ---------- Step 7: autogen + configure ----------
-Log "Step 7/11: autogen.sh + configure (WinDivert + Npcap flags)"
+Log "Step 7/12: autogen.sh + configure (WinDivert + Npcap flags)"
 $srcUnix       = $SrcDir -replace '\\','/' -replace '^C:','/c'
 $wdIncludeUnix = $WinDivertInclude -replace '\\','/' -replace '^C:','/c'
 $wdLibUnix     = $WinDivertLib -replace '\\','/' -replace '^C:','/c'
@@ -208,11 +262,11 @@ $npcapIncUnix  = $NpcapInclude -replace '\\','/' -replace '^C:','/c'
 $npcapLibUnix  = $NpcapLib -replace '\\','/' -replace '^C:','/c'
 
 $env:MSYSTEM = "UCRT64"
-& $Msys2Bash -lc "cd '$srcUnix' && ./autogen.sh" 2>&1 | Out-Null
+Invoke-Bash "cd '$srcUnix' && ./autogen.sh" | Out-Null
 $configureCmd = "cd '$srcUnix' && ./configure --prefix=/usr/local " +
     "--with-libpcap-includes='$npcapIncUnix' --with-libpcap-libraries='$npcapLibUnix' " +
     "--enable-windivert=yes --with-windivert-include='$wdIncludeUnix' --with-windivert-libraries='$wdLibUnix'"
-& $Msys2Bash -lc $configureCmd 2>&1 | Out-Null
+Invoke-Bash $configureCmd | Out-Null
 
 $acHeader = "$SrcDir\src\autoconf.h"
 if (-not (Test-Path $acHeader)) { Die "configure did not produce src/autoconf.h - it likely failed. Re-run manually to see the error: MSYSTEM=UCRT64 bash -lc `"$configureCmd`"" }
@@ -223,15 +277,15 @@ if ($acContent -notmatch "#define WINDIVERT 1" -or $acContent -notmatch "#define
 Log "  WinDivert + Npcap both confirmed detected"
 
 # ---------- Step 8: build ----------
-Log "Step 8/11: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
+Log "Step 8/12: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
 $cores = [Environment]::ProcessorCount
-& $Msys2Bash -lc "cd '$srcUnix' && make -j$cores" 2>&1 | Tee-Object -Variable makeOut | Out-Null
+$makeOut = Invoke-Bash "cd '$srcUnix' && make -j$cores"
 $exitLine = $makeOut | Select-String "^make: \*\*\*" | Select-Object -Last 1
 if ($exitLine) { Die "make failed: $exitLine`nFull log was very long - re-run manually to see it: MSYSTEM=UCRT64 bash -lc `"cd '$srcUnix' && make -j$cores`"" }
 Log "  build completed"
 
 # ---------- Step 9: find the REAL binary + assemble deploy folder ----------
-Log "Step 9/11: locating real binary + assembling self-contained deploy folder"
+Log "Step 9/12: locating real binary + assembling self-contained deploy folder"
 # GOTCHA FIXED: the top-level src/suricata.exe is a libtool WRAPPER STUB
 # (~36 KB) for a not-yet-installed binary that links against shared
 # libraries - it fails to run standalone (DLL load errors / "not
@@ -265,24 +319,48 @@ Copy-Item "$WinDivertLib\WinDivert.dll" $DeployRoot -Force
 
 Log "  deploy folder ready: $DeployRoot"
 
-# ---------- Step 10: config + DROP rules (full ET Open + agb-black.rules) ----------
-Log "Step 10/11: suricata.yaml + rules, converted to action 'drop' for real inline blocking"
-if (-not $SkipRulesSetup) {
-    Write-Host ""
-    Write-Host "########################################################################" -ForegroundColor Red
-    Write-Host "#  WARNING: converting the FULL ~50,000-signature ET Open ruleset to    #" -ForegroundColor Red
-    Write-Host "#  action 'drop' is a genuinely risky configuration on a live           #" -ForegroundColor Red
-    Write-Host "#  interface. Most ET Open signatures are tuned for ALERTING, not       #" -ForegroundColor Red
-    Write-Host "#  blocking - many are noisy/informational and will false-positive on   #" -ForegroundColor Red
-    Write-Host "#  legitimate traffic. Running this with a broad filter (e.g. 'true' =  #" -ForegroundColor Red
-    Write-Host "#  capture everything) can disrupt normal network use on this machine.  #" -ForegroundColor Red
-    Write-Host "#  This is why real production IPS deployments curate a SUBSET of       #" -ForegroundColor Red
-    Write-Host "#  high-confidence rules for blocking, not the entire IDS ruleset.      #" -ForegroundColor Red
-    Write-Host "#  Test with a NARROW WinDivert filter (one specific test IP), on a     #" -ForegroundColor Red
-    Write-Host "#  disposable machine, before ever considering 'true' or production use.#" -ForegroundColor Red
-    Write-Host "########################################################################" -ForegroundColor Red
-    Write-Host ""
+# ---------- helper shared by Step 10 and Step 11's scheduled tasks ----------
+# ET Open stays as-is (action alert) - it's the full ~50,000-signature
+# ruleset, most of it tuned for visibility/alerting, not blocking. Only
+# agb-black.rules (the curated, purpose-built blacklist) gets converted to
+# drop, so IPS mode only ever actively blocks the same small, deliberate
+# set of IOCs the IDS deployment already trusts for auto-kill - not the
+# entire noisy IDS ruleset.
+function Get-EtOpenRuleset([string]$suricataExe, [string]$destPath, [string]$workDir) {
+    $ver = (& $suricataExe -V 2>&1 | Select-String -Pattern '(\d+\.\d+\.\d+)' | Select-Object -First 1).Matches.Groups[1].Value
+    $mm = $ver.Substring(0, $ver.LastIndexOf('.'))
+    $tarPath = "$workDir\emerging.rules.tar.gz"
+    $urls = @("https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz",
+              "https://rules.emergingthreats.net/open/suricata-$mm.0/emerging.rules.tar.gz",
+              "https://rules.emergingthreats.net/open/suricata-$mm/emerging.rules.tar.gz")
+    $got = $false
+    foreach ($u in $urls) { try { Invoke-WebRequest -Uri $u -OutFile $tarPath -UseBasicParsing; $got = $true; break } catch {} }
+    if (-not $got) { return $false }
+    $extractDir = "$workDir\rules-extract"
+    if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+    & tar.exe -xzf $tarPath -C $extractDir
+    $rfiles = Get-ChildItem (Join-Path $extractDir 'rules') -Filter *.rules -ErrorAction SilentlyContinue
+    if (-not $rfiles) { $rfiles = Get-ChildItem $extractDir -Recurse -Filter *.rules }
+    $sb = New-Object Text.StringBuilder
+    foreach ($f in $rfiles) { [void]$sb.AppendLine([IO.File]::ReadAllText($f.FullName)) }
+    [IO.File]::WriteAllText($destPath, $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
+    return $true
+}
+function Get-AgbBlackDropRuleset([string]$destPath) {
+    $tmpPath = "$env:TEMP\agb-black-source.rules"
+    try {
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-black.rules" -OutFile $tmpPath -UseBasicParsing
+    } catch { return $false }
+    $text = [IO.File]::ReadAllText($tmpPath)
+    $dropText = [regex]::Replace($text, '(?m)^alert\s', 'drop ')
+    [IO.File]::WriteAllText($destPath, $dropText, (New-Object Text.UTF8Encoding($false)))
+    return $true
+}
 
+# ---------- Step 10: config + rules (ET Open = alert, agb-black.rules = drop) ----------
+Log "Step 10/12: suricata.yaml + rules (ET Open stays alert-only, agb-black.rules converted to drop)"
+if (-not $SkipRulesSetup) {
     $RuleDir = "$DeployRoot\rules"
     $LogDir  = "$DeployRoot\log"
     New-Item -ItemType Directory -Force -Path $RuleDir, $LogDir | Out-Null
@@ -308,12 +386,12 @@ if (-not $SkipRulesSetup) {
         $y = Set-YamlKeyIps $y 'default-log-dir'   ("'{0}'" -f $LogDir)
         $y = Set-YamlKeyIps $y 'default-rule-path' ("'{0}'" -f $RuleDir)
         if ($HomeNet) { $y = Set-YamlKeyIps $y 'HOME_NET' ('"{0}"' -f $HomeNet) }
-        # rule-files -> just our one merged+converted file
+        # rule-files -> ET Open (alert) + agb-black-drop (drop)
         $ylines = $y -split "`r?`n"
         $rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }
         if($rf -ge 0){
             $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
-            $ylines = @($ylines[0..$rf]) + @('  - suricata-drop.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+            $ylines = @($ylines[0..$rf]) + @('  - suricata.rules','  - agb-black-drop.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
             $y = $ylines -join "`r`n"
         }
         # same eve-log stats overflow fix as agb-full-setup.ps1 - see that
@@ -330,60 +408,97 @@ if (-not $SkipRulesSetup) {
         [IO.File]::WriteAllText("$DeployRoot\suricata.yaml", $y, $utf8NoBom)
         Log "  suricata.yaml written ($DeployRoot\suricata.yaml)"
 
-        # --- ET Open ruleset, version-matched, same source as agb-full-setup.ps1 ---
-        $ver = (& "$DeployRoot\suricata.exe" -V 2>&1 | Select-String -Pattern '(\d+\.\d+\.\d+)' | Select-Object -First 1).Matches.Groups[1].Value
-        $mm = $ver.Substring(0, $ver.LastIndexOf('.'))
-        $tarPath = "$WorkRoot\emerging.rules.tar.gz"
-        $urls = @("https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz",
-                  "https://rules.emergingthreats.net/open/suricata-$mm.0/emerging.rules.tar.gz",
-                  "https://rules.emergingthreats.net/open/suricata-$mm/emerging.rules.tar.gz")
-        $got = $false
-        foreach ($u in $urls) { try { Log "  downloading ET Open: $u"; Invoke-WebRequest -Uri $u -OutFile $tarPath -UseBasicParsing; $got = $true; break } catch { Warn "  failed $u" } }
-        if (-not $got) {
-            Warn "  could not download ET Open ruleset - proceeding with agb-black.rules only"
+        Log "  downloading ET Open ruleset (action: alert, unconverted)..."
+        $etOk = Get-EtOpenRuleset -suricataExe "$DeployRoot\suricata.exe" -destPath "$RuleDir\suricata.rules" -workDir $WorkRoot
+        if ($etOk) {
+            $sigCount = ([regex]::Matches([IO.File]::ReadAllText("$RuleDir\suricata.rules"), '(?m)^\s*alert\s')).Count
+            Log "  wrote $RuleDir\suricata.rules ($sigCount alert signatures - visibility only, does not block)"
         } else {
-            $extractDir = "$WorkRoot\rules-extract"
-            if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
-            New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
-            & tar.exe -xzf $tarPath -C $extractDir
+            Warn "  could not download ET Open ruleset - proceeding with agb-black.rules only"
         }
 
-        # --- agb-black.rules from the repo (same blacklist as the IDS deployment) ---
-        $agbBlackPath = "$WorkRoot\agb-black.rules"
-        try {
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-black.rules" -OutFile $agbBlackPath -UseBasicParsing
-        } catch { Warn "  could not download agb-black.rules ($($_.Exception.Message))" }
-
-        # --- merge everything, then convert action alert -> drop ---
-        # GOTCHA/RISK: this converts EVERY signature to blocking, including
-        # low-confidence/informational ET rules never designed for it - see
-        # the loud warning printed above. DNS-type rules are included in the
-        # conversion too (WinDivert drops the query packet itself here,
-        # which is safe/correct at the packet level - unlike the Active
-        # Response scenario in agb-kill-block.ps1, there is no "wrong IP"
-        # to block since nothing downstream is guessing at a resolved IP).
-        $utf8 = New-Object Text.UTF8Encoding($false)
-        $sb = New-Object Text.StringBuilder
-        if (Test-Path $extractDir) {
-            $rfiles = Get-ChildItem (Join-Path $extractDir 'rules') -Filter *.rules -ErrorAction SilentlyContinue
-            if (-not $rfiles) { $rfiles = Get-ChildItem $extractDir -Recurse -Filter *.rules }
-            foreach ($f in $rfiles) { [void]$sb.AppendLine([IO.File]::ReadAllText($f.FullName)) }
+        Log "  downloading agb-black.rules and converting to action drop..."
+        $agbOk = Get-AgbBlackDropRuleset -destPath "$RuleDir\agb-black-drop.rules"
+        if ($agbOk) {
+            $dropCount = ([regex]::Matches([IO.File]::ReadAllText("$RuleDir\agb-black-drop.rules"), '(?m)^\s*drop\s')).Count
+            Log "  wrote $RuleDir\agb-black-drop.rules ($dropCount signatures converted to drop - these ACTUALLY BLOCK)"
+        } else {
+            Warn "  could not download agb-black.rules - no rules will actually block until this is fixed"
         }
-        if (Test-Path $agbBlackPath) { [void]$sb.AppendLine([IO.File]::ReadAllText($agbBlackPath)) }
-        $rulesText = $sb.ToString()
-        $dropRulesText = [regex]::Replace($rulesText, '(?m)^alert\s', 'drop ')
-        $sigCountTotal = ([regex]::Matches($rulesText, '(?m)^\s*(alert|drop)\s')).Count
-        $sigCountDrop  = ([regex]::Matches($dropRulesText, '(?m)^\s*drop\s')).Count
-        [IO.File]::WriteAllText("$RuleDir\suricata-drop.rules", $dropRulesText, $utf8)
-        Log "  wrote $RuleDir\suricata-drop.rules ($sigCountTotal signatures, $sigCountDrop converted to drop)"
-        Log "  original alert-only copies kept for reference: $tarPath / $agbBlackPath"
     }
 } else {
     Log "  skipped (-SkipRulesSetup) - deploy folder has only the binary, no yaml/rules"
 }
 
-# ---------- Step 11: verify ----------
-Log "Step 11/11: verify"
+# ---------- Step 11: daily scheduled tasks (keep ET Open + agb-black.rules current) ----------
+Log "Step 11/12: daily rule refresh scheduled tasks"
+if (-not $SkipScheduledTask -and (Test-Path "$DeployRoot\suricata.yaml")) {
+    # No Windows service is registered for the IPS build (it's meant to be
+    # run interactively per-test, not continuously in the background - see
+    # the safety notes in this script's final output and the README). So
+    # these tasks only need to refresh the rule FILES on disk; there is no
+    # running process to restart. If you later wire this up as a service
+    # yourself, add a restart step here too.
+    $IpsScriptsDir = "$WorkRoot\ips-scripts"
+    New-Item -ItemType Directory -Force -Path $IpsScriptsDir | Out-Null
+
+    # --- Task A: ET Open ruleset refresh, 13:00 daily (matches the IDS
+    # deployment's "Suricata Daily Update And Log Rotation" timing) ---
+    $etTaskScript = "$IpsScriptsDir\refresh-et-open.ps1"
+    $etBody = @"
+`$ErrorActionPreference = 'Continue'
+function Get-EtOpenRuleset([string]`$suricataExe, [string]`$destPath, [string]`$workDir) {
+    `$ver = (& `$suricataExe -V 2>&1 | Select-String -Pattern '(\d+\.\d+\.\d+)' | Select-Object -First 1).Matches.Groups[1].Value
+    `$mm = `$ver.Substring(0, `$ver.LastIndexOf('.'))
+    `$tarPath = "`$workDir\emerging.rules.tar.gz"
+    `$urls = @("https://rules.emergingthreats.net/open/suricata-`$ver/emerging.rules.tar.gz","https://rules.emergingthreats.net/open/suricata-`$mm.0/emerging.rules.tar.gz","https://rules.emergingthreats.net/open/suricata-`$mm/emerging.rules.tar.gz")
+    `$got = `$false
+    foreach (`$u in `$urls) { try { Invoke-WebRequest -Uri `$u -OutFile `$tarPath -UseBasicParsing; `$got = `$true; break } catch {} }
+    if (-not `$got) { return }
+    `$extractDir = "`$workDir\rules-extract"
+    if (Test-Path `$extractDir) { Remove-Item `$extractDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path `$extractDir | Out-Null
+    & tar.exe -xzf `$tarPath -C `$extractDir
+    `$rfiles = Get-ChildItem (Join-Path `$extractDir 'rules') -Filter *.rules -ErrorAction SilentlyContinue
+    if (-not `$rfiles) { `$rfiles = Get-ChildItem `$extractDir -Recurse -Filter *.rules }
+    `$sb = New-Object Text.StringBuilder
+    foreach (`$f in `$rfiles) { [void]`$sb.AppendLine([IO.File]::ReadAllText(`$f.FullName)) }
+    [IO.File]::WriteAllText(`$destPath, `$sb.ToString(), (New-Object Text.UTF8Encoding(`$false)))
+}
+Get-EtOpenRuleset -suricataExe '$DeployRoot\suricata.exe' -destPath '$RuleDir\suricata.rules' -workDir '$WorkRoot'
+"@
+    [IO.File]::WriteAllText($etTaskScript, $etBody, (New-Object Text.UTF8Encoding($false)))
+    $etAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$etTaskScript`""
+    $etTrigger   = New-ScheduledTaskTrigger -Daily -At '13:00'
+    $etPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+    Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-ET-Refresh' -Action $etAction -Trigger $etTrigger -Principal $etPrincipal -Force | Out-Null
+    Log "  scheduled task 'AGB-Suricata-IPS-ET-Refresh' registered - daily 13:00 as SYSTEM"
+
+    # --- Task B: agb-black.rules refresh + drop-conversion, 1:30 PM daily
+    # (matches the IDS deployment's "AGB-Suricata-Rules-Deploy" timing) ---
+    $agbTaskScript = "$IpsScriptsDir\refresh-agb-black-drop.ps1"
+    $agbBody = @"
+`$ErrorActionPreference = 'Continue'
+`$tmpPath = "`$env:TEMP\agb-black-source.rules"
+try {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-black.rules" -OutFile `$tmpPath -UseBasicParsing
+    `$text = [IO.File]::ReadAllText(`$tmpPath)
+    `$dropText = [regex]::Replace(`$text, '(?m)^alert\s', 'drop ')
+    [IO.File]::WriteAllText('$RuleDir\agb-black-drop.rules', `$dropText, (New-Object Text.UTF8Encoding(`$false)))
+} catch {}
+"@
+    [IO.File]::WriteAllText($agbTaskScript, $agbBody, (New-Object Text.UTF8Encoding($false)))
+    $agbAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$agbTaskScript`""
+    $agbTrigger   = New-ScheduledTaskTrigger -Daily -At '1:30PM'
+    $agbPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+    Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-Rules-Deploy' -Action $agbAction -Trigger $agbTrigger -Principal $agbPrincipal -Force | Out-Null
+    Log "  scheduled task 'AGB-Suricata-IPS-Rules-Deploy' registered - daily 1:30 PM as SYSTEM"
+} else {
+    Log "  skipped (-SkipScheduledTask, or Step 10 rules setup did not complete)"
+}
+
+# ---------- Step 12: verify ----------
+Log "Step 12/12: verify"
 Push-Location $DeployRoot
 try {
     $verOut = & ".\suricata.exe" -V 2>&1
@@ -408,22 +523,24 @@ if ($versionLine -and $wdLine -match "yes") {
     $rulesReady = Test-Path "$DeployRoot\suricata.yaml"
     if ($rulesReady) {
         Write-Host ""
-        Write-Host "suricata.yaml + suricata-drop.rules (ET Open + agb-black.rules, converted to 'drop') are ready." -ForegroundColor Green
+        Write-Host "suricata.yaml is ready. suricata.rules (ET Open, alert-only, visibility) and" -ForegroundColor Green
+        Write-Host "agb-black-drop.rules (your curated blacklist, action drop - THIS actually blocks)" -ForegroundColor Green
+        Write-Host "are both in place. Both refresh daily via the scheduled tasks (13:00 / 1:30 PM)." -ForegroundColor Green
         Write-Host ""
-        Write-Host "  NEXT STEP - test with a NARROW filter first (Administrator, interactive -" -ForegroundColor Yellow
-        Write-Host "  installs a kernel driver on first use, so run this yourself, not unattended):" -ForegroundColor Yellow
+        Write-Host "  NEXT STEP - test (Administrator, interactive - installs a kernel driver on" -ForegroundColor Yellow
+        Write-Host "  first use, so run this yourself, not unattended):" -ForegroundColor Yellow
         Write-Host "    cd '$DeployRoot'" -ForegroundColor Yellow
         Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"ip.DstAddr == 152.42.235.124`"" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "  Do NOT run with a broad filter like `"true`" (= capture everything) until" -ForegroundColor Red
-        Write-Host "  you've confirmed narrow blocking works and understand the false-positive" -ForegroundColor Red
-        Write-Host "  risk of the full ET Open ruleset running in DROP mode (see the warning" -ForegroundColor Red
-        Write-Host "  printed during Step 10, or the README's IPS mode section)." -ForegroundColor Red
+        Write-Host "  Start narrow (one test IP, as above) before ever widening the filter -" -ForegroundColor Red
+        Write-Host "  agb-black-drop.rules is small and curated so this is far safer than the" -ForegroundColor Red
+        Write-Host "  earlier full-ET-Open-as-drop design, but it's still real inline blocking" -ForegroundColor Red
+        Write-Host "  you haven't tested on this exact hardware yet." -ForegroundColor Red
     } else {
         Write-Host ""
         Write-Host "Rules/config setup was skipped or failed - deploy folder has only the bare" -ForegroundColor Yellow
         Write-Host "binary. Re-run without -SkipRulesSetup (or check the Step 10 warning above)" -ForegroundColor Yellow
-        Write-Host "to get a testable suricata.yaml + drop-converted rules." -ForegroundColor Yellow
+        Write-Host "to get a testable suricata.yaml + rules." -ForegroundColor Yellow
     }
     Write-Host ""
     Write-Host "Also remember: test on a disposable machine before considering this for a" -ForegroundColor Yellow

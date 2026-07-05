@@ -239,18 +239,28 @@ if (-not $SkipPackageInstall) {
     }
     if (-not $ok) { Die "pacman install did not succeed after 5 attempts - check network/mirrors manually" }
 
-    # GOTCHA FIXED: cargo.exe registered in the package DB but missing from
-    # disk (Defender quarantine, see Step 0). Verify it actually exists and
-    # runs; if not, the Step 0 exclusion likely didn't take effect in time -
-    # reinstall just the rust package once more now that it's excluded.
-    $cargoOk = $false
-    Invoke-Bash "cargo --version" | Out-Null
-    if ($LASTEXITCODE -eq 0) { $cargoOk = $true }
-    if (-not $cargoOk) {
-        Warn "  cargo.exe missing/broken (likely AV quarantine) - reinstalling rust package"
+    # GOTCHA FIXED: `cargo --version` can transiently fail immediately after
+    # pacman extracts it - Defender's real-time scanner briefly locks a
+    # freshly-written exe the instant it appears on disk, even with an
+    # exclusion in place (the exclusion stops it being REMOVED, not
+    # necessarily the split-second on-write scan lock). Confirmed by
+    # testing during development: `cargo --version` failed inside the
+    # script, yet the exact same file ran fine seconds later run directly -
+    # the file was never actually missing/corrupted, just momentarily busy.
+    # Retry with short delays before concluding it's genuinely broken and
+    # escalating to a full package reinstall.
+    function Test-CargoOk {
+        for ($i = 0; $i -lt 6; $i++) {
+            Invoke-Bash "cargo --version" | Out-Null
+            if ($LASTEXITCODE -eq 0) { return $true }
+            Start-Sleep -Milliseconds 1000
+        }
+        return $false
+    }
+    if (-not (Test-CargoOk)) {
+        Warn "  cargo.exe not responding after 6s of retries - reinstalling rust package (could be AV quarantine, or just a slower scan lock than usual)"
         Invoke-Bash "pacman -S --noconfirm mingw-w64-ucrt-x86_64-rust" | Out-Null
-        Invoke-Bash "cargo --version" | Out-Null
-        if ($LASTEXITCODE -ne 0) { Die "cargo still not working after reinstall - check the Defender exclusion from Step 0 manually: Add-MpPreference -ExclusionPath 'C:\msys64'" }
+        if (-not (Test-CargoOk)) { Die "cargo still not working after reinstall + retries - check the Defender exclusion from Step 0 manually: Add-MpPreference -ExclusionPath 'C:\msys64'" }
     }
     Log "  dependencies installed and verified"
 } else {

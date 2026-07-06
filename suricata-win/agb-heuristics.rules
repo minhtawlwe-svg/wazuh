@@ -1,0 +1,59 @@
+# ============================================================================
+# AGB HEURISTICS - Suricata behavioral/heuristic detection rules (agent-side)
+# ============================================================================
+# Unlike agb-black.rules (confirmed-bad IOCs) and agb-white.rules (known-good
+# suppressions), these are PATTERN/BEHAVIOR heuristics - they catch categories
+# of suspicious activity the stock ET Open ruleset and agb-black.rules don't
+# cover: DGA-style domains, large outbound transfers, and known-bad JA3 TLS
+# fingerprints. All stay action `alert` (never auto-converted to `drop` by
+# build-suricata-ips.ps1, same treatment as suricata.rules) - heuristics have
+# a real false-positive rate and should never auto-block without a human
+# reviewing first. sid range 1000200+ reserved for this file.
+#
+# Corresponding Wazuh manager escalation rules (101000-101059) are documented
+# separately - see the org's Custom_Suricata.xml / local_rules_c2.xml.
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# DGA (Domain Generation Algorithm) heuristic
+# ---------------------------------------------------------------------------
+# Catches the general SHAPE of a DGA domain (long, single-label, no vowel-rich
+# dictionary structure, no dashes) rather than any specific malware family.
+# This is inherently approximate - legitimate CDN/cloud-storage endpoints
+# (S3 buckets, some CDN edge hostnames) occasionally match this shape too,
+# which is exactly why this fires an ALERT for a human to review, never a
+# block. Tune false positives by adding known-good matches to agb-white.rules
+# rather than editing this pattern.
+alert dns any any -> any any (msg:"AGB HEURISTIC: Possible DGA domain query (long random-looking label)"; dns.query; pcre:"/^[a-z0-9]{16,40}\.(com|net|org|info|biz|top|xyz|club|online)$/i"; sid:1000200; rev:1;)
+
+# ---------------------------------------------------------------------------
+# Large outbound transfer heuristic (possible data exfiltration)
+# ---------------------------------------------------------------------------
+# Flags a single TCP flow that has sent more than ~50MB to a REMOTE
+# (non-RFC1918) destination. Threshold is deliberately high to avoid
+# flooding on ordinary large downloads/uploads (cloud backups, video calls,
+# Windows Update) - tune $EXTERNAL_NET/threshold per environment if this is
+# too noisy or not sensitive enough.
+alert tcp $HOME_NET any -> !$HOME_NET any (msg:"AGB HEURISTIC: Large outbound data transfer (possible exfiltration)"; flow:established,to_server; stream_size:client,>,52428800; sid:1000201; rev:1;)
+
+# ---------------------------------------------------------------------------
+# JA3 TLS fingerprint blocklist (STARTER SET - expand as needed)
+# ---------------------------------------------------------------------------
+# JA3 hashes fingerprint the TLS ClientHello itself (cipher list, extensions,
+# curves) - many malware families/C2 frameworks reuse the same TLS library
+# defaults and so share a stable JA3 hash regardless of which domain/IP
+# they're currently using, unlike IP/domain blocklists which go stale fast.
+# REQUIRES suricata.yaml: app-layer.protocols.tls.ja3-fingerprints: yes
+# (off by default - a measurable per-flow CPU cost, opt-in only). Without
+# this yaml setting, these rules load fine but will never match anything.
+# This is a tiny STARTER set (well-known public/historical hashes) - a real
+# deployment should pull a maintained JA3 threat-intel feed and refresh it
+# on the same daily schedule as agb-black.rules, not hand-maintain this list.
+alert tls any any -> any any (msg:"AGB HEURISTIC: JA3 hash matches known Trickbot/Emotet-family loader"; ja3.hash; content:"6734f37431670b3ab4292b8f60f29984"; sid:1000210; rev:1;)
+alert tls any any -> any any (msg:"AGB HEURISTIC: JA3 hash matches known generic malware TLS stack"; ja3.hash; content:"e7d705a3286e19ea42f587b344ee6865"; sid:1000211; rev:1;)
+
+# Add future heuristics below, one alert rule per entry.
+# Example (commented out) - unusually high DNS query VOLUME from one host in
+# a short window (possible DNS tunneling) is better done as a Wazuh
+# frequency/timeframe correlation rule on event_type:dns than a single
+# Suricata signature - see the manager-side rules for that pattern instead.

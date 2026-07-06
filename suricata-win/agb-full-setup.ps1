@@ -172,11 +172,12 @@ if($StripFileMagic){ $rulesText = ($rulesText -split "`n" | Where-Object { $_ -n
 $sigCount = ([regex]::Matches($rulesText,'(?m)^\s*(alert|drop)\s')).Count
 Log "wrote $RulesFile ($($rfiles.Count) files, ~$sigCount signatures)"
 
-# ---------- 4b. AGB whitelist/blacklist rules (pulled straight from GitHub) ----------
-Log "downloading agb-white.rules / agb-black.rules ..."
+# ---------- 4b. AGB whitelist/blacklist/heuristics rules (pulled straight from GitHub) ----------
+Log "downloading agb-white.rules / agb-black.rules / agb-heuristics.rules ..."
 Invoke-WebRequest -Uri "$GitHubBase/agb-white.rules" -OutFile (Join-Path $RuleDir 'agb-white.rules') -UseBasicParsing
 Invoke-WebRequest -Uri "$GitHubBase/agb-black.rules" -OutFile (Join-Path $RuleDir 'agb-black.rules') -UseBasicParsing
-Log "agb-white.rules / agb-black.rules written to $RuleDir"
+Invoke-WebRequest -Uri "$GitHubBase/agb-heuristics.rules" -OutFile (Join-Path $RuleDir 'agb-heuristics.rules') -UseBasicParsing
+Log "agb-white.rules / agb-black.rules / agb-heuristics.rules written to $RuleDir"
 
 # ---------- 5. configure suricata.yaml ----------
 Copy-Item $Yaml "$Yaml.bak-$(Get-Date -Format yyyyMMddHHmmss)" -Force
@@ -188,14 +189,17 @@ function Set-YamlKey([string]$text,[string]$key,[string]$val){
 $y = Set-YamlKey $y 'default-log-dir'   ("'{0}'" -f $LogDir)
 $y = Set-YamlKey $y 'default-rule-path' ("'{0}'" -f $RuleDir)
 if($HomeNet){ $y = Set-YamlKey $y 'HOME_NET' ('"{0}"' -f $HomeNet) }
-# rule-files: -> merged suricata.rules + agb-white.rules + agb-black.rules
+# rule-files: -> merged suricata.rules + agb-white.rules + agb-black.rules + agb-heuristics.rules
 $ylines = $y -split "`r?`n"
 $rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }
 if($rf -ge 0){
     $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
-    $ylines = @($ylines[0..$rf]) + @('  - suricata.rules','  - agb-white.rules','  - agb-black.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+    $ylines = @($ylines[0..$rf]) + @('  - suricata.rules','  - agb-white.rules','  - agb-black.rules','  - agb-heuristics.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
     $y = $ylines -join "`r`n"
 }
+# JA3 fingerprinting is off by default (real per-flow CPU cost) - without
+# it, agb-heuristics.rules' ja3.hash rules load but can never match
+if($y -match '(?m)^(\s*)ja3-fingerprints:.*$'){ $y = Set-YamlKey $y 'ja3-fingerprints' 'yes' }
 # disable eve-log 'stats' output - see project_c2_detection_engineering memory.
 # Suricata's periodic stats record has hundreds of nested numeric fields
 # (decoder.*, tcp.*, app_layer.*, flow.*); once flattened by Wazuh's generic

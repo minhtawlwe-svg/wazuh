@@ -33,11 +33,12 @@ try {
     # 1. Pull latest rule files straight from GitHub (no git, no auth)
     Invoke-WebRequest -Uri "$BaseUrl/agb-white.rules" -OutFile "$DestDir\agb-white.rules.new" -UseBasicParsing
     Invoke-WebRequest -Uri "$BaseUrl/agb-black.rules" -OutFile "$DestDir\agb-black.rules.new" -UseBasicParsing
-    Log "[+] Downloaded latest agb-white.rules / agb-black.rules from GitHub"
+    Invoke-WebRequest -Uri "$BaseUrl/agb-heuristics.rules" -OutFile "$DestDir\agb-heuristics.rules.new" -UseBasicParsing
+    Log "[+] Downloaded latest agb-white.rules / agb-black.rules / agb-heuristics.rules from GitHub"
 
     # 2. Only replace if content actually changed (avoids needless restarts)
     $changed = $false
-    foreach ($name in @("agb-white.rules","agb-black.rules")) {
+    foreach ($name in @("agb-white.rules","agb-black.rules","agb-heuristics.rules")) {
         $old = "$DestDir\$name"
         $new = "$DestDir\$name.new"
         if (-not (Test-Path $old) -or (Get-FileHash $old).Hash -ne (Get-FileHash $new).Hash) {
@@ -56,12 +57,16 @@ try {
         exit 0
     }
 
-    # 3. Ensure suricata.yaml references both files (idempotent)
+    # 3. Ensure suricata.yaml references all three files (idempotent)
     $yamlContent = Get-Content $SuricataYaml -Raw
     if ($yamlContent -notmatch 'agb-white\.rules') {
-        $yamlContent = $yamlContent -replace '(\n\s*-\s*suricata\.rules\s*\n)', "`$1  - agb-white.rules`r`n  - agb-black.rules`r`n"
+        $yamlContent = $yamlContent -replace '(\n\s*-\s*suricata\.rules\s*\n)', "`$1  - agb-white.rules`r`n  - agb-black.rules`r`n  - agb-heuristics.rules`r`n"
         Set-Content -Path $SuricataYaml -Value $yamlContent -Encoding ascii
-        Log "[+] Added agb-white.rules / agb-black.rules to suricata.yaml rule-files"
+        Log "[+] Added agb-white.rules / agb-black.rules / agb-heuristics.rules to suricata.yaml rule-files"
+    } elseif ($yamlContent -notmatch 'agb-heuristics\.rules') {
+        $yamlContent = $yamlContent -replace '(\n\s*-\s*agb-black\.rules\s*\n)', "`$1  - agb-heuristics.rules`r`n"
+        Set-Content -Path $SuricataYaml -Value $yamlContent -Encoding ascii
+        Log "[+] Added agb-heuristics.rules to suricata.yaml rule-files (agb-white/agb-black already present)"
     }
 
     # 4. Validate BEFORE restarting.

@@ -568,6 +568,18 @@ if (-not $SkipRulesSetup) {
         }
         $y = Set-YamlKeyIps $y 'classification-file'    ("'{0}\classification.config'" -f $DeployRoot)
         $y = Set-YamlKeyIps $y 'reference-config-file'  ("'{0}\reference.config'" -f $DeployRoot)
+        # GOTCHA: JA3 TLS fingerprint hashing is off by default (a real
+        # per-flow CPU cost Suricata doesn't pay unless asked to) - without
+        # this, agb-heuristics.rules' ja3.hash rules load fine but can
+        # never match anything, silently. Stock yaml already has this key
+        # under app-layer.protocols.tls; Set-YamlKeyIps only replaces an
+        # existing key so this is a no-op (with a warning) if that
+        # assumption doesn't hold on a future Suricata version's stock yaml.
+        if ($y -match '(?m)^(\s*)ja3-fingerprints:.*$') {
+            $y = Set-YamlKeyIps $y 'ja3-fingerprints' 'yes'
+        } else {
+            Warn "  ja3-fingerprints key not found in stock suricata.yaml - JA3 rules in agb-heuristics.rules will not match anything until this is enabled manually"
+        }
         # rule-files -> agb-white.rules (pass) + ET Open (alert) + agb-black-drop (drop)
         # GOTCHA FIXED: agb-white.rules (the pass-rule whitelist that
         # suppresses known-good noise like *.agb.mywire.org DYN_DNS alerts)
@@ -582,7 +594,7 @@ if (-not $SkipRulesSetup) {
         $rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }
         if($rf -ge 0){
             $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
-            $ylines = @($ylines[0..$rf]) + @('  - agb-white.rules','  - suricata.rules','  - agb-black-drop.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+            $ylines = @($ylines[0..$rf]) + @('  - agb-white.rules','  - suricata.rules','  - agb-black-drop.rules','  - agb-heuristics.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
             $y = $ylines -join "`r`n"
         }
         # same eve-log stats overflow fix as agb-full-setup.ps1 - see that
@@ -624,6 +636,14 @@ if (-not $SkipRulesSetup) {
             Log "  wrote $RuleDir\agb-black-drop.rules ($dropCount signatures converted to drop - these ACTUALLY BLOCK)"
         } else {
             Warn "  could not download agb-black.rules - no rules will actually block until this is fixed"
+        }
+
+        Log "  downloading agb-heuristics.rules (DGA/exfil/JA3 heuristics, alert-only)..."
+        try {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-heuristics.rules" -OutFile "$RuleDir\agb-heuristics.rules" -UseBasicParsing
+            Log "  wrote $RuleDir\agb-heuristics.rules"
+        } catch {
+            Warn "  could not download agb-heuristics.rules ($($_.Exception.Message))"
         }
     }
 } else {
@@ -694,6 +714,9 @@ try {
 try {
     Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-white.rules" -OutFile '$RuleDir\agb-white.rules' -UseBasicParsing
 } catch {}
+try {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-heuristics.rules" -OutFile '$RuleDir\agb-heuristics.rules' -UseBasicParsing
+} catch {}
 `$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
 if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue }
 "@
@@ -702,7 +725,7 @@ if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS'
     $agbTrigger   = New-ScheduledTaskTrigger -Daily -At '1:30PM'
     $agbPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
     Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-Rules-Deploy' -Action $agbAction -Trigger $agbTrigger -Principal $agbPrincipal -Force | Out-Null
-    Log "  scheduled task 'AGB-Suricata-IPS-Rules-Deploy' registered - daily 1:30 PM as SYSTEM (refreshes agb-black-drop.rules and agb-white.rules)"
+    Log "  scheduled task 'AGB-Suricata-IPS-Rules-Deploy' registered - daily 1:30 PM as SYSTEM (refreshes agb-black-drop.rules, agb-white.rules, agb-heuristics.rules)"
 } else {
     Log "  skipped (-SkipScheduledTask, or Step 10 rules setup did not complete)"
 }

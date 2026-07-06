@@ -83,7 +83,16 @@ Write-Host "  inline enforcement of whatever is in that file, refreshed daily fr
 Write-Host ""
 
 if (-not $Force) {
-    Start-Sleep -Seconds 5
+    # A silent sleep doesn't protect against keystrokes typed DURING it -
+    # the console still queues them, and Read-Host can consume that queued
+    # input immediately instead of waiting for a fresh keypress. Visible
+    # countdown + explicit flush right before the prompt fixes both.
+    for ($i = 8; $i -ge 1; $i--) {
+        Write-Host "`r  (prompt appears in $i...)  " -NoNewline -ForegroundColor DarkGray
+        Start-Sleep -Seconds 1
+    }
+    Write-Host "`r                              `r" -NoNewline
+    try { $Host.UI.RawUI.FlushInputBuffer() } catch {}
     $ans = Read-Host "Type YES (all caps) to confirm you understand and want to proceed"
     if ($ans -ne "YES") { Log "Not confirmed - exiting without changes."; exit 0 }
 }

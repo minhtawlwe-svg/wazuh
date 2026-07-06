@@ -863,10 +863,21 @@ if ($SkipService) {
     Write-Host ""
     $svcConfirmed = $NoPrompt
     if (-not $svcConfirmed) {
-        # Give a beat to actually read the warning above before the prompt
-        # appears - especially easy to blow past on a fast re-run where
-        # every earlier step just says "already present, skipping".
-        Start-Sleep -Seconds 5
+        # GOTCHA FIXED: a silent Start-Sleep before Read-Host doesn't
+        # protect against anything typed DURING the sleep - the console
+        # still queues those keystrokes, and Read-Host can immediately
+        # consume that queued input the instant it starts, instead of
+        # waiting for a fresh keypress. Looks exactly like the prompt
+        # "auto-dropped" before there was time to type YES. Fixed by
+        # showing a visible countdown (so it's clear when to start typing)
+        # AND explicitly flushing the input buffer right before Read-Host,
+        # so anything typed too early is discarded rather than consumed.
+        for ($i = 8; $i -ge 1; $i--) {
+            Write-Host "`r  (prompt appears in $i...)  " -NoNewline -ForegroundColor DarkGray
+            Start-Sleep -Seconds 1
+        }
+        Write-Host "`r                              `r" -NoNewline
+        try { $Host.UI.RawUI.FlushInputBuffer() } catch {}
         $ans = Read-Host "Type YES to confirm you understand and want the always-on service (anything else skips it)"
         $svcConfirmed = ($ans -eq "YES")
     }

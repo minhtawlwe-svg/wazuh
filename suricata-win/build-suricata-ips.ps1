@@ -708,7 +708,7 @@ if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS'
 }
 
 # ---------- Step 13: wire the IPS build's eve.json into the Wazuh agent ----------
-Log "Step 13/15: Wazuh agent wiring (eve.json localfile)"
+Log "Step 13/15: Wazuh agent wiring (eve.json localfile + netsh Active Response)"
 $ossecConf = "C:\Program Files (x86)\ossec-agent\ossec.conf"
 if ($SkipWazuhWiring) {
     Log "  skipped (-SkipWazuhWiring)"
@@ -758,6 +758,37 @@ if ($SkipWazuhWiring) {
                 Warn "  could not restart WazuhSvc ($($_.Exception.Message)) - restart it manually: Restart-Service WazuhSvc"
             }
         }
+    }
+
+    # --- deploy the netsh-based Active Response script, so this agent can
+    # ALSO run the existing kill+block AR as a redundant backup layer
+    # behind WinDivert's instant inline block. This is the hybrid design
+    # this whole IPS project has been building toward: WinDivert drops the
+    # packet immediately (zero dependency on Wazuh), while the same event
+    # still ships to Wazuh -> matches the same manager rule (86601 ->
+    # 100802, tagged c2_autokill) -> the manager dispatches AR back to
+    # THIS agent -> agb-kill-block.ps1 fires a few seconds later,
+    # netsh-blocking the IP and killing the offending process too.
+    # GOTCHA: this only deploys the SCRIPT FILES to the agent's AR bin
+    # folder (a client-side requirement - execd looks up the executable by
+    # name here). The manager-side <command>/<active-response> wiring that
+    # maps the AR name to this script and triggers it for rules_group
+    # c2_autokill is a ONE-TIME, group-wide manager config already set up
+    # earlier for other agents - not something this Windows-side script
+    # can or needs to configure per-agent. If AR still doesn't fire after
+    # this, check the agent is in the right Wazuh group on the manager.
+    $arBinDir = "C:\Program Files (x86)\ossec-agent\active-response\bin"
+    if (Test-Path $arBinDir) {
+        Log "  deploying agb-kill-block.ps1/.cmd (netsh Active Response) to $arBinDir"
+        try {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/wazuh-manager/active-response/agb-kill-block.ps1" -OutFile "$arBinDir\agb-kill-block.ps1" -UseBasicParsing
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/wazuh-manager/active-response/agb-kill-block.cmd" -OutFile "$arBinDir\agb-kill-block.cmd" -UseBasicParsing
+            Log "  deployed - this agent can now run the netsh kill+block AR alongside WinDivert's instant inline block"
+        } catch {
+            Warn "  could not deploy agb-kill-block AR script ($($_.Exception.Message)) - IPS blocking still works, just without the redundant netsh/kill backup layer"
+        }
+    } else {
+        Log "  no active-response\bin folder found - skipping AR script deployment"
     }
 }
 

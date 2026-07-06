@@ -341,6 +341,7 @@ Both refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, 
    This is safe to widen because only `agb-black-drop.rules`' small, curated signature set can ever trigger an actual drop — the full ET Open ruleset stays alert-only regardless of filter scope. For an even narrower starting point (the one specifically live-fire verified), scope to a single test IP instead: `--windivert "ip.DstAddr == 152.42.235.124"`.
 2. **Test on a disposable machine first**, not this laptop or any production agent. Inline mode sits directly in the traffic path — a crash there can affect connectivity through that interface, a materially different risk profile than IDS-only.
 3. Pass `-SkipRulesSetup` if you only want the bare binary (e.g. to write your own curated rule set instead), `-SkipScheduledTask` to skip just the daily refresh tasks, or `-SkipWazuhWiring` to keep this build fully standalone even if a Wazuh agent is present.
+4. Pass `-InstallService` to also register it as an always-on background service in the same run (prompts for a typed `YES` confirmation first, same warning as [Running it continuously](#running-it-continuously-optional-higher-risk) below) — or run `install-suricata-ips-service.ps1` separately afterward if you'd rather build and test manually first.
 
 A full narrative write-up of the entire build (including every error exactly as it happened) exists as a Word document generated during development — ask for `Suricata-IPS-Mode-Build-Guide.docx` if you need the long-form version with screenshots-equivalent detail. Note it was written before several of the fixes above landed, so the script's own inline comments are the more current source of truth.
 
@@ -350,11 +351,11 @@ Everything above (`build-suricata-ips.ps1`) deliberately stops at a manual, supe
 
 **Making it auto-start on boot and run continuously in the background is a meaningfully bigger commitment** — no window to watch, no easy stop button if a rule misfires or it crashes. Only do this on a machine you've already tested thoroughly, ideally a disposable one, not something you depend on for daily use.
 
-If you still want that:
+If you still want that, either add `-InstallService` to `build-suricata-ips.ps1` for a one-command build-and-run (same confirmation prompt, at the end of the same run), or add it separately afterward to an already-built deployment:
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/install-suricata-ips-service.ps1 -UseBasicParsing | iex
 ```
-Prompts for an explicit `YES` confirmation (repeating the warning above) before doing anything. Registers a Windows service named **`SuricataIPS`** — deliberately *not* the generic `Suricata` name Suricata's own `--service-install` would use internally (that name is a hardcoded compile-time constant, not configurable, and could collide with a regular IDS-mode Suricata service if one's ever added on the same machine). Auto-starts on boot, restarts itself on crash (via `sc.exe failure`), uses the same `outbound` filter the build script suggests by default (override with `-WinDivertFilter`).
+Both paths prompt for an explicit `YES` confirmation (repeating the warning above) before doing anything. Registers a Windows service named **`SuricataIPS`** — deliberately *not* the generic `Suricata` name Suricata's own `--service-install` would use internally (that name is a hardcoded compile-time constant, not configurable, and could collide with a regular IDS-mode Suricata service if one's ever added on the same machine). Auto-starts on boot, restarts itself on crash (via `sc.exe failure`), uses the same `outbound` filter the build script suggests by default (override with `-WinDivertFilter`).
 
 ```powershell
 Get-Service SuricataIPS      # check status

@@ -42,7 +42,9 @@ param(
     [switch]$SkipNpcap,                                    # if the Npcap DRIVER is already installed
     [switch]$SkipRulesSetup,                               # skip Step 11 - leaves just the bare binary, no yaml/rules
     [switch]$SkipScheduledTask,                            # skip Step 12 - no daily rule refresh
-    [switch]$SkipWazuhWiring                               # skip Step 13 - don't touch the Wazuh agent's ossec.conf
+    [switch]$SkipWazuhWiring,                              # skip Step 13 - don't touch the Wazuh agent's ossec.conf
+    [switch]$InstallService,                               # opt-in Step 14 - register as an always-on Windows service (see the warning it prints)
+    [string]$WinDivertFilter      = "outbound"             # filter used only if -InstallService is passed
 )
 
 $ErrorActionPreference = "Stop"
@@ -151,7 +153,7 @@ if ($SelectedAdapter) {
 # unsigned, compiled from source, linked against a packet-interception
 # driver) is exactly the profile Defender flags, and it lives OUTSIDE
 # C:\msys64 entirely.
-Log "Step 0/14: Windows Defender exclusions"
+Log "Step 0/15: Windows Defender exclusions"
 # GOTCHA FIXED: on machines with Tamper Protection ON, Add-MpPreference
 # silently fails to actually enforce exclusion changes - Defender
 # deliberately ignores/reverts exclusion edits made via PowerShell (or any
@@ -205,7 +207,7 @@ foreach ($exPath in @('C:\msys64', $DeployRoot)) {
 }
 
 # ---------- Step 1: MSYS2 ----------
-Log "Step 1/14: MSYS2 base install"
+Log "Step 1/15: MSYS2 base install"
 if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
     $tmp = "$env:TEMP\msys2-base.sfx.exe"
     Log "  downloading MSYS2 base archive..."
@@ -233,7 +235,7 @@ if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
 }
 
 # ---------- Step 2: build dependencies via pacman ----------
-Log "Step 2/14: build dependencies (this can take a while + may need retries - see gotcha)"
+Log "Step 2/15: build dependencies (this can take a while + may need retries - see gotcha)"
 if (-not $SkipPackageInstall) {
     # GOTCHA FIXED: several MSYS2 mirrors were unstable during this build
     # ("Operation too slow" / DNS resolution failures for specific mirrors).
@@ -283,7 +285,7 @@ if (-not $SkipPackageInstall) {
 }
 
 # ---------- Step 3: Npcap DRIVER (not just the SDK - the built binary needs this at runtime) ----------
-Log "Step 3/14: Npcap driver"
+Log "Step 3/15: Npcap driver"
 if (-not $SkipNpcap) {
     $hasNpcap = (Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap')
     if ($hasNpcap) {
@@ -305,7 +307,7 @@ if (-not $SkipNpcap) {
 }
 
 # ---------- Step 4: WinDivert 1.4.3 (NOT the latest version - see gotcha) ----------
-Log "Step 4/14: WinDivert 1.4.3"
+Log "Step 4/15: WinDivert 1.4.3"
 # GOTCHA FIXED: Suricata 8.0.3's source-windivert.c is written against the
 # OLD WinDivert 1.x API. The current WinDivert release (2.2.2) has a
 # materially different, incompatible API and will compile-fail with dozens
@@ -328,7 +330,7 @@ $WinDivertInclude = "$WorkRoot\WinDivert-1.4.3-A\include"
 $WinDivertLib     = "$WorkRoot\WinDivert-1.4.3-A\x86_64"
 
 # ---------- Step 5: Npcap SDK ----------
-Log "Step 5/14: Npcap SDK (headers/libs for linking)"
+Log "Step 5/15: Npcap SDK (headers/libs for linking)"
 if (-not (Test-Path "$WorkRoot\npcap-sdk\Include\pcap.h")) {
     $npcapZip = "$WorkRoot\npcap-sdk-1.15.zip"
     Log "  downloading Npcap SDK..."
@@ -346,7 +348,7 @@ $NpcapInclude = "$WorkRoot\npcap-sdk\Include"
 $NpcapLib     = "$WorkRoot\npcap-sdk\Lib\x64"
 
 # ---------- Step 6: Suricata source ----------
-Log "Step 6/14: Suricata source ($SuricataVersion)"
+Log "Step 6/15: Suricata source ($SuricataVersion)"
 $SrcDir = "$WorkRoot\suricata-src"
 if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  cloning..."
@@ -357,7 +359,7 @@ if (-not (Test-Path "$SrcDir\configure.ac")) {
 }
 
 # ---------- Step 7: patch a real upstream bug - WinDivert never marks IPS mode ----------
-Log "Step 7/14: patching known upstream bug (WinDivert eve.json action field)"
+Log "Step 7/15: patching known upstream bug (WinDivert eve.json action field)"
 # GOTCHA FIXED: confirmed by reading Suricata's own source (not guessed).
 # eve.json's alert.action field is computed in src/output-json-alert.c:
 #   } else if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) { action = "blocked"; }
@@ -387,7 +389,7 @@ if ($scContent -match [regex]::Escape("suri->run_mode = RUNMODE_WINDIVERT;`n    
 }
 
 # ---------- Step 8: autogen + configure ----------
-Log "Step 8/14: autogen.sh + configure (WinDivert + Npcap flags)"
+Log "Step 8/15: autogen.sh + configure (WinDivert + Npcap flags)"
 $srcUnix       = $SrcDir -replace '\\','/' -replace '^C:','/c'
 $wdIncludeUnix = $WinDivertInclude -replace '\\','/' -replace '^C:','/c'
 $wdLibUnix     = $WinDivertLib -replace '\\','/' -replace '^C:','/c'
@@ -409,7 +411,7 @@ if ($acContent -notmatch "#define WINDIVERT 1" -or $acContent -notmatch "#define
 Log "  WinDivert + Npcap both confirmed detected"
 
 # ---------- Step 8: build ----------
-Log "Step 9/14: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
+Log "Step 9/15: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
 $cores = [Environment]::ProcessorCount
 $makeOut = Invoke-Bash "cd '$srcUnix' && make -j$cores"
 $exitLine = $makeOut | Select-String "^make: \*\*\*" | Select-Object -Last 1
@@ -417,7 +419,7 @@ if ($exitLine) { Die "make failed: $exitLine`nFull log was very long - re-run ma
 Log "  build completed"
 
 # ---------- Step 9: find the REAL binary + assemble deploy folder ----------
-Log "Step 10/14: locating real binary + assembling self-contained deploy folder"
+Log "Step 10/15: locating real binary + assembling self-contained deploy folder"
 # GOTCHA FIXED: the top-level src/suricata.exe is a libtool WRAPPER STUB
 # (~36 KB) for a not-yet-installed binary that links against shared
 # libraries - it fails to run standalone (DLL load errors / "not
@@ -521,7 +523,7 @@ function Get-AgbBlackDropRuleset([string]$destPath) {
 }
 
 # ---------- Step 10: config + rules (ET Open = alert, agb-black.rules = drop) ----------
-Log "Step 11/14: suricata.yaml + rules (ET Open stays alert-only, agb-black.rules converted to drop)"
+Log "Step 11/15: suricata.yaml + rules (ET Open stays alert-only, agb-black.rules converted to drop)"
 if (-not $SkipRulesSetup) {
     $RuleDir = "$DeployRoot\rules"
     $LogDir  = "$DeployRoot\log"
@@ -611,7 +613,7 @@ if (-not $SkipRulesSetup) {
 }
 
 # ---------- Step 11: daily scheduled tasks (keep ET Open + agb-black.rules current) ----------
-Log "Step 12/14: daily rule refresh scheduled tasks"
+Log "Step 12/15: daily rule refresh scheduled tasks"
 if (-not $SkipScheduledTask -and (Test-Path "$DeployRoot\suricata.yaml")) {
     # No Windows service is registered for the IPS build (it's meant to be
     # run interactively per-test, not continuously in the background - see
@@ -678,7 +680,7 @@ try {
 }
 
 # ---------- Step 13: wire the IPS build's eve.json into the Wazuh agent ----------
-Log "Step 13/14: Wazuh agent wiring (eve.json localfile)"
+Log "Step 13/15: Wazuh agent wiring (eve.json localfile)"
 $ossecConf = "C:\Program Files (x86)\ossec-agent\ossec.conf"
 if ($SkipWazuhWiring) {
     Log "  skipped (-SkipWazuhWiring)"
@@ -731,8 +733,70 @@ if ($SkipWazuhWiring) {
     }
 }
 
-# ---------- Step 14: verify ----------
-Log "Step 14/14: verify"
+# ---------- Step 14: install as an always-on Windows service (opt-in) ----------
+Log "Step 14/15: Windows service (opt-in)"
+if (-not $InstallService) {
+    Log "  skipped - pass -InstallService to register this as an always-on background service instead of a manual test"
+} else {
+    # GOTCHA: Suricata's own --service-install hardcodes the service name
+    # as "Suricata" (PROG_NAME, a compile-time constant in suricata.h, not
+    # configurable via CLI) - registering under that name risks a
+    # collision with a regular IDS-mode Suricata service if one's ever
+    # added on the same machine. Register directly via sc.exe under a
+    # distinct name instead. Same logic as the standalone
+    # install-suricata-ips-service.ps1, inlined here for a one-command
+    # build+run-as-service flow; that script still exists separately for
+    # adding the service to an already-built deployment later.
+    Write-Host ""
+    Write-Host "########################################################################" -ForegroundColor Red
+    Write-Host "#  WARNING: -InstallService registers a Windows SERVICE that auto-starts #" -ForegroundColor Red
+    Write-Host "#  on boot and runs Suricata in REAL INLINE TRAFFIC-BLOCKING mode        #" -ForegroundColor Red
+    Write-Host "#  continuously, in the background, with no window to watch or Ctrl+C.   #" -ForegroundColor Red
+    Write-Host "#  A crash, a bad rule, or unexpected blocking behavior would now affect  #" -ForegroundColor Red
+    Write-Host "#  this machine's connectivity unattended, until you notice and stop it.  #" -ForegroundColor Red
+    Write-Host "#  Only do this on a machine you've already tested thoroughly.            #" -ForegroundColor Red
+    Write-Host "########################################################################" -ForegroundColor Red
+    Write-Host ""
+    $svcConfirmed = $NoPrompt
+    if (-not $svcConfirmed) {
+        $ans = Read-Host "Type YES to confirm you understand and want the always-on service (anything else skips it)"
+        $svcConfirmed = ($ans -eq "YES")
+    }
+    if (-not $svcConfirmed) {
+        Log "  not confirmed - skipping service install (build itself is unaffected; re-run with -InstallService -NoPrompt to skip this prompt too)"
+    } else {
+        $svcName = "SuricataIPS"
+        $existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if ($existingSvc) {
+            if ($existingSvc.Status -eq 'Running') { Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 }
+            & sc.exe delete $svcName | Out-Null
+            Start-Sleep -Seconds 1
+        }
+        $binPath = "`"$DeployRoot\suricata.exe`" -c `"$DeployRoot\suricata.yaml`" --windivert `"$WinDivertFilter`""
+        & sc.exe create $svcName binPath= $binPath start= auto DisplayName= "Suricata IPS (WinDivert, experimental)" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Warn "  sc.exe create failed (exit $LASTEXITCODE) - service not installed, build itself still succeeded"
+        } else {
+            & sc.exe description $svcName "Experimental inline-blocking Suricata build (WinDivert). Filter: $WinDivertFilter. Managed by build-suricata-ips.ps1 in minhtawlwe-svg/wazuh." | Out-Null
+            & sc.exe failure $svcName reset= 86400 actions= restart/5000/restart/30000/restart/60000 | Out-Null
+            try {
+                Start-Service -Name $svcName -ErrorAction Stop
+                Start-Sleep -Seconds 3
+                $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -eq 'Running') {
+                    Log "  '$svcName' installed and running (filter: $WinDivertFilter) - auto-starts on boot. Stop-Service $svcName / .\install-suricata-ips-service.ps1 -Remove to undo."
+                } else {
+                    Warn "  service created but not Running (status: $($svc.Status)) - check $DeployRoot\log\suricata.log"
+                }
+            } catch {
+                Warn "  Start-Service failed ($($_.Exception.Message)) - service is registered but not started"
+            }
+        }
+    }
+}
+
+# ---------- Step 15: verify ----------
+Log "Step 15/15: verify"
 Push-Location $DeployRoot
 try {
     $verOut = & ".\suricata.exe" -V 2>&1

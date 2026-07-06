@@ -40,8 +40,9 @@ param(
     [switch]$SkipMsys2Install,                              # if MSYS2 already installed
     [switch]$SkipPackageInstall,                           # if deps already installed
     [switch]$SkipNpcap,                                    # if the Npcap DRIVER is already installed
-    [switch]$SkipRulesSetup,                               # skip Step 10 - leaves just the bare binary, no yaml/rules
-    [switch]$SkipScheduledTask                             # skip Step 11 - no daily rule refresh
+    [switch]$SkipRulesSetup,                               # skip Step 11 - leaves just the bare binary, no yaml/rules
+    [switch]$SkipScheduledTask,                            # skip Step 12 - no daily rule refresh
+    [switch]$SkipWazuhWiring                               # skip Step 13 - don't touch the Wazuh agent's ossec.conf
 )
 
 $ErrorActionPreference = "Stop"
@@ -150,7 +151,7 @@ if ($SelectedAdapter) {
 # unsigned, compiled from source, linked against a packet-interception
 # driver) is exactly the profile Defender flags, and it lives OUTSIDE
 # C:\msys64 entirely.
-Log "Step 0/13: Windows Defender exclusions"
+Log "Step 0/14: Windows Defender exclusions"
 # GOTCHA FIXED: on machines with Tamper Protection ON, Add-MpPreference
 # silently fails to actually enforce exclusion changes - Defender
 # deliberately ignores/reverts exclusion edits made via PowerShell (or any
@@ -204,7 +205,7 @@ foreach ($exPath in @('C:\msys64', $DeployRoot)) {
 }
 
 # ---------- Step 1: MSYS2 ----------
-Log "Step 1/13: MSYS2 base install"
+Log "Step 1/14: MSYS2 base install"
 if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
     $tmp = "$env:TEMP\msys2-base.sfx.exe"
     Log "  downloading MSYS2 base archive..."
@@ -232,7 +233,7 @@ if (-not (Test-Path $Msys2Bash) -and -not $SkipMsys2Install) {
 }
 
 # ---------- Step 2: build dependencies via pacman ----------
-Log "Step 2/13: build dependencies (this can take a while + may need retries - see gotcha)"
+Log "Step 2/14: build dependencies (this can take a while + may need retries - see gotcha)"
 if (-not $SkipPackageInstall) {
     # GOTCHA FIXED: several MSYS2 mirrors were unstable during this build
     # ("Operation too slow" / DNS resolution failures for specific mirrors).
@@ -282,7 +283,7 @@ if (-not $SkipPackageInstall) {
 }
 
 # ---------- Step 3: Npcap DRIVER (not just the SDK - the built binary needs this at runtime) ----------
-Log "Step 3/13: Npcap driver"
+Log "Step 3/14: Npcap driver"
 if (-not $SkipNpcap) {
     $hasNpcap = (Get-Service npcap -ErrorAction SilentlyContinue) -or (Test-Path 'C:\Windows\System32\Npcap')
     if ($hasNpcap) {
@@ -304,7 +305,7 @@ if (-not $SkipNpcap) {
 }
 
 # ---------- Step 4: WinDivert 1.4.3 (NOT the latest version - see gotcha) ----------
-Log "Step 4/13: WinDivert 1.4.3"
+Log "Step 4/14: WinDivert 1.4.3"
 # GOTCHA FIXED: Suricata 8.0.3's source-windivert.c is written against the
 # OLD WinDivert 1.x API. The current WinDivert release (2.2.2) has a
 # materially different, incompatible API and will compile-fail with dozens
@@ -327,7 +328,7 @@ $WinDivertInclude = "$WorkRoot\WinDivert-1.4.3-A\include"
 $WinDivertLib     = "$WorkRoot\WinDivert-1.4.3-A\x86_64"
 
 # ---------- Step 5: Npcap SDK ----------
-Log "Step 5/13: Npcap SDK (headers/libs for linking)"
+Log "Step 5/14: Npcap SDK (headers/libs for linking)"
 if (-not (Test-Path "$WorkRoot\npcap-sdk\Include\pcap.h")) {
     $npcapZip = "$WorkRoot\npcap-sdk-1.15.zip"
     Log "  downloading Npcap SDK..."
@@ -345,7 +346,7 @@ $NpcapInclude = "$WorkRoot\npcap-sdk\Include"
 $NpcapLib     = "$WorkRoot\npcap-sdk\Lib\x64"
 
 # ---------- Step 6: Suricata source ----------
-Log "Step 6/13: Suricata source ($SuricataVersion)"
+Log "Step 6/14: Suricata source ($SuricataVersion)"
 $SrcDir = "$WorkRoot\suricata-src"
 if (-not (Test-Path "$SrcDir\configure.ac")) {
     Log "  cloning..."
@@ -356,7 +357,7 @@ if (-not (Test-Path "$SrcDir\configure.ac")) {
 }
 
 # ---------- Step 7: patch a real upstream bug - WinDivert never marks IPS mode ----------
-Log "Step 7/13: patching known upstream bug (WinDivert eve.json action field)"
+Log "Step 7/14: patching known upstream bug (WinDivert eve.json action field)"
 # GOTCHA FIXED: confirmed by reading Suricata's own source (not guessed).
 # eve.json's alert.action field is computed in src/output-json-alert.c:
 #   } else if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) { action = "blocked"; }
@@ -386,7 +387,7 @@ if ($scContent -match [regex]::Escape("suri->run_mode = RUNMODE_WINDIVERT;`n    
 }
 
 # ---------- Step 8: autogen + configure ----------
-Log "Step 8/13: autogen.sh + configure (WinDivert + Npcap flags)"
+Log "Step 8/14: autogen.sh + configure (WinDivert + Npcap flags)"
 $srcUnix       = $SrcDir -replace '\\','/' -replace '^C:','/c'
 $wdIncludeUnix = $WinDivertInclude -replace '\\','/' -replace '^C:','/c'
 $wdLibUnix     = $WinDivertLib -replace '\\','/' -replace '^C:','/c'
@@ -408,7 +409,7 @@ if ($acContent -notmatch "#define WINDIVERT 1" -or $acContent -notmatch "#define
 Log "  WinDivert + Npcap both confirmed detected"
 
 # ---------- Step 8: build ----------
-Log "Step 9/13: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
+Log "Step 9/14: make (this is the long step - Rust crate compile alone took ~10 min in testing)"
 $cores = [Environment]::ProcessorCount
 $makeOut = Invoke-Bash "cd '$srcUnix' && make -j$cores"
 $exitLine = $makeOut | Select-String "^make: \*\*\*" | Select-Object -Last 1
@@ -416,7 +417,7 @@ if ($exitLine) { Die "make failed: $exitLine`nFull log was very long - re-run ma
 Log "  build completed"
 
 # ---------- Step 9: find the REAL binary + assemble deploy folder ----------
-Log "Step 10/13: locating real binary + assembling self-contained deploy folder"
+Log "Step 10/14: locating real binary + assembling self-contained deploy folder"
 # GOTCHA FIXED: the top-level src/suricata.exe is a libtool WRAPPER STUB
 # (~36 KB) for a not-yet-installed binary that links against shared
 # libraries - it fails to run standalone (DLL load errors / "not
@@ -520,7 +521,7 @@ function Get-AgbBlackDropRuleset([string]$destPath) {
 }
 
 # ---------- Step 10: config + rules (ET Open = alert, agb-black.rules = drop) ----------
-Log "Step 11/13: suricata.yaml + rules (ET Open stays alert-only, agb-black.rules converted to drop)"
+Log "Step 11/14: suricata.yaml + rules (ET Open stays alert-only, agb-black.rules converted to drop)"
 if (-not $SkipRulesSetup) {
     $RuleDir = "$DeployRoot\rules"
     $LogDir  = "$DeployRoot\log"
@@ -610,7 +611,7 @@ if (-not $SkipRulesSetup) {
 }
 
 # ---------- Step 11: daily scheduled tasks (keep ET Open + agb-black.rules current) ----------
-Log "Step 12/13: daily rule refresh scheduled tasks"
+Log "Step 12/14: daily rule refresh scheduled tasks"
 if (-not $SkipScheduledTask -and (Test-Path "$DeployRoot\suricata.yaml")) {
     # No Windows service is registered for the IPS build (it's meant to be
     # run interactively per-test, not continuously in the background - see
@@ -676,8 +677,62 @@ try {
     Log "  skipped (-SkipScheduledTask, or Step 10 rules setup did not complete)"
 }
 
-# ---------- Step 12: verify ----------
-Log "Step 13/13: verify"
+# ---------- Step 13: wire the IPS build's eve.json into the Wazuh agent ----------
+Log "Step 13/14: Wazuh agent wiring (eve.json localfile)"
+$ossecConf = "C:\Program Files (x86)\ossec-agent\ossec.conf"
+if ($SkipWazuhWiring) {
+    Log "  skipped (-SkipWazuhWiring)"
+} elseif (-not (Test-Path $ossecConf)) {
+    Log "  no Wazuh agent found at $ossecConf - skipping (this build works standalone without Wazuh too)"
+} elseif (-not (Test-Path "$DeployRoot\log\eve.json") -and -not (Test-Path "$DeployRoot\rules")) {
+    Log "  skipped - rules/log setup (Step 11) didn't complete, nothing to wire up yet"
+} else {
+    # GOTCHA: this build's eve.json is a SEPARATE file from any existing
+    # IDS-mode Suricata's eve.json (agb-full-setup.ps1) - they don't
+    # collide, but Wazuh needs its OWN <localfile> entry for this one, it
+    # won't pick it up automatically just because a similar entry may
+    # already exist for the other Suricata instance.
+    $eveLocation = "$DeployRoot\log\eve.json"
+    $content = Get-Content $ossecConf -Raw
+    if ($content -match [regex]::Escape($eveLocation)) {
+        Log "  already wired up, skipping"
+    } else {
+        $backupPath = "$ossecConf.bak-ips-$(Get-Date -Format yyyyMMdd-HHmmss)"
+        Copy-Item $ossecConf $backupPath -Force
+        Log "  backed up ossec.conf -> $backupPath"
+
+        $newBlock = "  <localfile>`r`n    <log_format>json</log_format>`r`n    <location>$eveLocation</location>`r`n  </localfile>`r`n`r`n"
+        # Insert before the LAST </ossec_config> close tag - more robust
+        # than matching any specific existing block's exact formatting,
+        # since that varies machine to machine (confirmed the hard way:
+        # this laptop had no prior Suricata localfile entry to pattern-
+        # match against at all).
+        $lastClose = $content.LastIndexOf("</ossec_config>")
+        if ($lastClose -lt 0) {
+            Warn "  no </ossec_config> found in ossec.conf - this file may be malformed. Skipping wiring; restore from $backupPath if needed."
+        } else {
+            $patched = $content.Substring(0, $lastClose) + $newBlock + $content.Substring($lastClose)
+            Set-Content -Path $ossecConf -Value $patched -NoNewline
+            Log "  added <localfile> for $eveLocation"
+
+            try {
+                Restart-Service -Name WazuhSvc -ErrorAction Stop
+                Start-Sleep -Seconds 3
+                $svc = Get-Service -Name WazuhSvc -ErrorAction SilentlyContinue
+                if ($svc -and $svc.Status -eq 'Running') {
+                    Log "  Wazuh agent restarted and running - IPS eve.json now shipping to your manager"
+                } else {
+                    Warn "  Wazuh agent restart did not come back Running - check manually: Get-Service WazuhSvc. Restore $backupPath and restart again if it won't start."
+                }
+            } catch {
+                Warn "  could not restart WazuhSvc ($($_.Exception.Message)) - restart it manually: Restart-Service WazuhSvc"
+            }
+        }
+    }
+}
+
+# ---------- Step 14: verify ----------
+Log "Step 14/14: verify"
 Push-Location $DeployRoot
 try {
     $verOut = & ".\suricata.exe" -V 2>&1

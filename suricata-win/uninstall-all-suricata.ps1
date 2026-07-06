@@ -85,6 +85,28 @@ foreach ($svcName in @("WinDivert", "WinDivert1.4", "WinDivert1.2")) {
     }
 }
 
+# ---------- 1.5. Wazuh agent eve.json wiring, if build-suricata-ips.ps1 added it ----------
+$ossecConf = "C:\Program Files (x86)\ossec-agent\ossec.conf"
+$eveLocation = "$DeployRoot\log\eve.json"
+if (Test-Path $ossecConf) {
+    $content = Get-Content $ossecConf -Raw
+    if ($content -match [regex]::Escape($eveLocation)) {
+        Act "remove the <localfile> entry for $eveLocation from ossec.conf and restart the Wazuh agent"
+        if (-not $WhatIfOnly) {
+            $backupPath = "$ossecConf.bak-ips-uninstall-$(Get-Date -Format yyyyMMdd-HHmmss)"
+            Copy-Item $ossecConf $backupPath -Force
+            $pattern = "(?s)\s*<localfile>\s*<log_format>json</log_format>\s*<location>$([regex]::Escape($eveLocation))</location>\s*</localfile>"
+            $patched = [regex]::Replace($content, $pattern, "")
+            Set-Content -Path $ossecConf -Value $patched -NoNewline
+            try { Restart-Service -Name WazuhSvc -ErrorAction Stop } catch { Warn "could not restart WazuhSvc - restart it manually" }
+        }
+    } else {
+        Log "no IPS eve.json wiring found in ossec.conf"
+    }
+} else {
+    Log "no Wazuh agent found - nothing to unwire"
+}
+
 # ---------- 2. IPS deploy folder ----------
 if (Test-Path $DeployRoot) {
     $sz = (Get-ChildItem $DeployRoot -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum

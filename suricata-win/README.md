@@ -303,20 +303,23 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
 ```
 
-**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a **ready-to-test** deployment in `C:\SuricataIPS\`: the binary, all runtime DLLs, a configured `suricata.yaml`, and rules. **Interactive by default** — prompts for capture interface and HOME_NET, same UX as `agb-full-setup.ps1` (pass `-NoPrompt` to auto-pick everything). Takes 20-60+ minutes (compiling ~250 Rust crates is the biggest cost) and needs ~5 GB free disk.
+**This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a **ready-to-test, live-fire-verified** deployment in `C:\SuricataIPS\`: the binary, all runtime DLLs, a configured `suricata.yaml`, rules, and (if a Wazuh agent is present) automatic wiring into it. **Interactive by default** — prompts for capture interface and HOME_NET, same UX as `agb-full-setup.ps1` (pass `-NoPrompt` to auto-pick everything). Takes 20-60+ minutes on a clean machine (compiling ~250 Rust crates is the biggest cost), much faster on a re-run since it skips anything already in place; needs ~5 GB free disk.
 
 **What it automates** (every one of these was a real error hit and fixed during development — see the script's own inline comments for the full "why"):
 | Step | Gotcha it avoids |
 | --- | --- |
-| Windows Defender exclusion for `C:\msys64` | Defender quarantines freshly-built `cargo.exe` and the WinDivert download within seconds — both known AV false positives for build tools |
+| Windows Defender exclusions for `C:\msys64` and the deploy folder | Defender quarantines freshly-built binaries and the WinDivert download within seconds — a known AV false-positive pattern for build tools. On machines with **Tamper Protection ON**, Defender silently ignores scripted exclusion changes entirely — the script detects this and hands the two folders to you via the Windows Security GUI instead, which Tamper Protection does honor |
 | MSYS2 + UCRT64 toolchain install | Retries automatically — MSYS2 mirrors are frequently unstable ("Operation too slow", DNS failures); pacman resumes from cache on retry |
-| Every bash invocation | Wrapped so a native command's harmless *stderr* text (e.g. pacman's own "is up to date -- reinstalling" notice) doesn't get turned into a fatal PowerShell error under `$ErrorActionPreference='Stop'` — a real bug hit and fixed during development |
+| Every bash invocation | Wrapped so a native command's harmless *stderr* text doesn't get turned into a fatal PowerShell error, and `MSYSTEM=UCRT64` is set before anything runs so `cargo`/`rustc` actually resolve on PATH — both real bugs that looked exactly like AV interference until traced to their actual cause |
 | Npcap driver | Installed from scratch if missing (interactive wizard — Npcap's free build has no silent-install mode) |
 | **WinDivert 1.4.3 specifically, not the latest release (2.2.2)** | Suricata 8.0.3's C code is written against the old 1.x API — the current API is incompatible and fails with dozens of compile errors |
+| **A genuine upstream Suricata bug: `--windivert` never marks IPS mode** | Confirmed by reading Suricata's own source — every other inline runmode (NFQ, IPFW, af-packet, netmap, dpdk) calls `EngineModeSetIPS()`, but neither `--windivert` nor `--windivert-forward` do. Without this, `eve.json`'s `alert.action` field always says `"allowed"` even for packets that were genuinely dropped. The script patches `suricata.c` to add the missing call, matching every other runmode |
 | Locating the real binary | The top-level `src/suricata.exe` after a successful build is a libtool wrapper stub (~36 KB, won't run) — the real 100+ MB binary is hidden in `src/.libs/suricata.exe` |
-| Assembling runtime DLLs | This is a dynamically-linked build; needs `api-ms-win-crt-*.dll` (copied from `C:\Windows\System32\downlevel\`, not on the default search path) plus several `ucrt64/bin` libraries |
-| `suricata.yaml` + rules | Generates a working config; see the split below |
+| Assembling runtime DLLs + the WinDivert kernel driver | Dynamically-linked build needs `api-ms-win-crt-*.dll` plus several `ucrt64/bin` libraries; `WinDivert.dll` alone isn't enough either — `WinDivertOpen()` also needs `WinDivert64.sys` sitting next to it, or the engine fails to start entirely |
+| Redeploying after a prior live test | The WinDivert kernel driver stays loaded (and locks its own `.sys` file) after `suricata.exe --windivert` exits — the script stops it first so a rebuild doesn't fail with "file in use" |
+| `suricata.yaml` + rules + classification/reference configs | Generates a working config pointing at files that actually exist in the deploy folder, not the official MSI's install path |
 | Daily rule refresh | Two scheduled tasks keep both rule files current, same timing as the IDS deployment |
+| **Wazuh agent wiring** | If a Wazuh agent is installed (`C:\Program Files (x86)\ossec-agent\`), adds a `<localfile>` entry for this build's `eve.json` (separate from any IDS-mode Suricata's own entry) and restarts the agent, so IPS-mode drops reach your manager — hitting the same rules (`86601` → `100316` → the `c2_autokill` AR group) as the IDS deployment, since it's the same `agb-black.rules` signature text |
 
 **Rules are deliberately split — only your curated blacklist actually blocks:**
 | File | Source | Action | Effect |
@@ -326,6 +329,8 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 
 Both refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, `AGB-Suricata-IPS-Rules-Deploy` at 1:30 PM — same times as the IDS deployment's equivalents). Since the IPS build isn't registered as a running service, these tasks just keep the rule files current on disk; there's no process to restart.
 
+**Live-fire verified** (2026-07-05): ran `.\suricata.exe -c suricata.yaml --windivert "ip.DstAddr == <test IP>"`, then tried to reach that IP from another window — connection genuinely failed, `fast.log` showed `[Drop]`, and `eve.json` correctly reported `"action":"blocked"`.
+
 **What's still manual after the script finishes:**
 1. **Test with a narrow filter first** (Administrator, interactive — WinDivert installs a kernel driver on first use, so run this yourself, not unattended):
    ```powershell
@@ -334,9 +339,9 @@ Both refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, 
    ```
    (substitute your own test C2 IP — this narrow filter only intercepts traffic to that one address, not your whole connection)
 2. **Test on a disposable machine first**, not this laptop or any production agent. Inline mode sits directly in the traffic path — a crash there can affect connectivity through that interface, a materially different risk profile than IDS-only.
-3. Pass `-SkipRulesSetup` if you only want the bare binary (e.g. to write your own curated rule set instead), or `-SkipScheduledTask` to skip just the daily refresh tasks.
+3. Pass `-SkipRulesSetup` if you only want the bare binary (e.g. to write your own curated rule set instead), `-SkipScheduledTask` to skip just the daily refresh tasks, or `-SkipWazuhWiring` to keep this build fully standalone even if a Wazuh agent is present.
 
-A full narrative write-up of the entire build (including every error exactly as it happened) exists as a Word document generated during development — ask for `Suricata-IPS-Mode-Build-Guide.docx` if you need the long-form version with screenshots-equivalent detail.
+A full narrative write-up of the entire build (including every error exactly as it happened) exists as a Word document generated during development — ask for `Suricata-IPS-Mode-Build-Guide.docx` if you need the long-form version with screenshots-equivalent detail. Note it was written before several of the fixes above landed, so the script's own inline comments are the more current source of truth.
 
 ### Removing the IPS build (and/or everything else)
 ```powershell

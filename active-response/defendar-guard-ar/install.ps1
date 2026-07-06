@@ -119,7 +119,22 @@ function Register-GuardTask {
         '  </Actions>'
         '</Task>'
     ))
-    Register-ScheduledTask -TaskName $Name -Xml $xml -Force | Out-Null
+    # Caller relies on a null return to fall back gracefully (see the
+    # if/else right after each call site) - without try/catch, a failure
+    # here becomes a terminating error under the script-wide
+    # $ErrorActionPreference = "Stop" and takes down the ENTIRE installer,
+    # not just this one task. Confirmed live: a malformed EventTrigger
+    # subscription threw "The specified channel path is invalid" and
+    # halted install.ps1 before it reached the Tamper audit / summary /
+    # self-test sections, even though Service-Watch had already
+    # registered fine and the design explicitly calls Event-Watch
+    # "best-effort".
+    try {
+        Register-ScheduledTask -TaskName $Name -Xml $xml -Force -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "  [!!] Register-ScheduledTask failed for '$Name': $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
     Write-Host "  [OK] Scheduled Task '$Name' registered." -ForegroundColor Green
     return $Name
 }
@@ -252,14 +267,32 @@ $r1 = Register-GuardTask -Name "Defender-Guard-Service-Watch" -Script $psSvc -Tr
 if ($r1) { $registered += $r1 }
 
 # 2) Event-watcher: fires on Defender state-change events (5001/5010/5012).
-#    Uses xpath-style Subscription so the task schema accepts it on
-#    modern Win10/11. Best-effort -- if it fails, service watchdog is
-#    still the failsafe.
+#    Best-effort -- if it fails, service watchdog is still the failsafe.
+# GOTCHA FIXED (confirmed live, two layers deep):
+#  1. A bare '*[System[Provider[@Name=...' XPath string is NOT a valid
+#     Subscription by itself - Register-ScheduledTask threw "The specified
+#     channel path is invalid" every time. Task Scheduler's Subscription
+#     element needs the FULL structured <QueryList><Query Path="..."><Select
+#     Path="...">...</Select></Query></QueryList> form, XML-entity-escaped
+#     since it's embedded as text inside another XML document. The '*' in
+#     '*[System[...' is a normal XPath wildcard for "any Event node" (Event
+#     Viewer's own custom-view XML uses the identical shape) - it was never
+#     a channel selector, so the channel has to be named via the Path
+#     attributes, not inline in the filter.
+#  2. Even with correct XML, this can still fail with "Access is denied" -
+#     the Windows Defender Operational channel carries a more restrictive
+#     ACL than most operational logs (by design, since it can reveal
+#     detection/exploit details), and validating a subscription against it
+#     may require SYSTEM rather than an elevated-Administrator context.
+#     Confirmed both failure modes live on a real machine. Both are now
+#     caught by Register-GuardTask's try/catch (see above) and fall through
+#     to the existing "channel policy / locked schema" skip message -
+#     Service-Watch (registered first, unconditionally) remains the real
+#     failsafe either way, exactly as this project's layer design intends.
+$subscription = '&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-Windows Defender/Operational"&gt;&lt;Select Path="Microsoft-Windows-Windows Defender/Operational"&gt;*[System[(EventID=5001 or EventID=5010 or EventID=5012)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;'
 $eventTrigger = [string]::Join([Environment]::NewLine, @(
     '<EventTrigger>'
-    '  <Subscription>'
-    '*[System[Provider[@Name=''Microsoft-Windows-Windows Defender''] and (EventID=5001 or EventID=5010 or EventID=5012)]]'
-    '</Subscription>'
+    "  <Subscription>$subscription</Subscription>"
     '  <Delay>PT0S</Delay>'
     '  <Enabled>true</Enabled>'
     '  <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>'

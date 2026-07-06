@@ -668,11 +668,22 @@ if (-not $SkipRulesSetup) {
                 $etLines = $allEt -split "`r?`n"
                 $torLines = $etLines | Where-Object { $_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
                 if ($torLines.Count -gt 0) {
-                    $torDropText = ($torLines -join "`r`n") -replace '(?m)^alert\s', 'drop '
+                    # GOTCHA FIXED: these ET signatures are written as
+                    # "[TorIPs] any -> $HOME_NET any" - they only match a
+                    # Tor node CONNECTING INTO the network (an
+                    # inbound-scanning/attack detection use case), not a
+                    # local host CONNECTING OUT to Tor, which is what
+                    # actually needs to be blocked here (Tor Browser
+                    # initiating a circuit). Confirmed live: a direct
+                    # Test-NetConnection to a listed Tor IP succeeded
+                    # (not blocked) with the rule in its original
+                    # direction. Swap source/dest so it reads
+                    # "$HOME_NET any -> [TorIPs] any" instead.
+                    $torDropText = ($torLines -join "`r`n") -replace '(?m)^alert tcp (\[[^\]]+\]) any -> \$HOME_NET any', 'drop tcp $HOME_NET any -> $1 any'
                     [IO.File]::WriteAllText("$RuleDir\agb-tor-drop.rules", $torDropText, (New-Object Text.UTF8Encoding($false)))
                     $keptLines = $etLines | Where-Object { $_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
                     [IO.File]::WriteAllText("$RuleDir\suricata.rules", ($keptLines -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
-                    Log "  wrote $RuleDir\agb-tor-drop.rules ($($torLines.Count) Tor node-IP signatures converted to drop - blocks Tor network connections, not just .onion)"
+                    Log "  wrote $RuleDir\agb-tor-drop.rules ($($torLines.Count) Tor node-IP signatures converted to drop, direction reversed to match outbound - blocks Tor network connections, not just .onion)"
                 } else {
                     Warn "  no ET TOR signatures were found in the downloaded ruleset - nothing to convert"
                 }
@@ -746,7 +757,7 @@ $(if (-not $SkipTorBlock) {
 `$etLines = `$allEt -split "``r?``n"
 `$torLines = `$etLines | Where-Object { `$_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
 if (`$torLines.Count -gt 0) {
-    `$torDropText = (`$torLines -join "``r``n") -replace '(?m)^alert\s', 'drop '
+    `$torDropText = (`$torLines -join "``r``n") -replace '(?m)^alert tcp (\[[^\]]+\]) any -> \`$HOME_NET any', 'drop tcp `$HOME_NET any -> `$1 any'
     [IO.File]::WriteAllText('$RuleDir\agb-tor-drop.rules', `$torDropText, (New-Object Text.UTF8Encoding(`$false)))
     `$keptLines = `$etLines | Where-Object { `$_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
     [IO.File]::WriteAllText('$RuleDir\suricata.rules', (`$keptLines -join "``r``n"), (New-Object Text.UTF8Encoding(`$false)))

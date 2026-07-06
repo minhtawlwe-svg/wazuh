@@ -43,8 +43,8 @@ param(
     [switch]$SkipRulesSetup,                               # skip Step 11 - leaves just the bare binary, no yaml/rules
     [switch]$SkipScheduledTask,                            # skip Step 12 - no daily rule refresh
     [switch]$SkipWazuhWiring,                              # skip Step 13 - don't touch the Wazuh agent's ossec.conf
-    [switch]$InstallService,                               # opt-in Step 14 - register as an always-on Windows service (see the warning it prints)
-    [string]$WinDivertFilter      = "outbound"             # filter used only if -InstallService is passed
+    [switch]$SkipService,                                  # skip Step 14 - by default this build registers as an always-on service (see the warning it prints; still requires a typed YES unless -NoPrompt)
+    [string]$WinDivertFilter      = "outbound"             # filter used by the Step 14 service
 )
 
 $ErrorActionPreference = "Stop"
@@ -615,12 +615,14 @@ if (-not $SkipRulesSetup) {
 # ---------- Step 11: daily scheduled tasks (keep ET Open + agb-black.rules current) ----------
 Log "Step 12/15: daily rule refresh scheduled tasks"
 if (-not $SkipScheduledTask -and (Test-Path "$DeployRoot\suricata.yaml")) {
-    # No Windows service is registered for the IPS build (it's meant to be
-    # run interactively per-test, not continuously in the background - see
-    # the safety notes in this script's final output and the README). So
-    # these tasks only need to refresh the rule FILES on disk; there is no
-    # running process to restart. If you later wire this up as a service
-    # yourself, add a restart step here too.
+    # GOTCHA: Step 14 (below) registers this build as an always-on service
+    # by default - if these tasks only refreshed the rule FILES on disk
+    # without also restarting that service, a continuously-running
+    # instance would keep enforcing stale rules forever, silently
+    # defeating the whole point of a daily refresh. Both task scripts
+    # below check for and restart the 'SuricataIPS' service (only if it's
+    # actually running - harmless no-op if the service was skipped or
+    # isn't installed on this machine).
     $IpsScriptsDir = "$WorkRoot\ips-scripts"
     New-Item -ItemType Directory -Force -Path $IpsScriptsDir | Out-Null
 
@@ -648,6 +650,8 @@ function Get-EtOpenRuleset([string]`$suricataExe, [string]`$destPath, [string]`$
     [IO.File]::WriteAllText(`$destPath, `$sb.ToString(), (New-Object Text.UTF8Encoding(`$false)))
 }
 Get-EtOpenRuleset -suricataExe '$DeployRoot\suricata.exe' -destPath '$RuleDir\suricata.rules' -workDir '$WorkRoot'
+`$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
+if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue }
 "@
     [IO.File]::WriteAllText($etTaskScript, $etBody, (New-Object Text.UTF8Encoding($false)))
     $etAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$etTaskScript`""
@@ -668,6 +672,8 @@ try {
     `$dropText = [regex]::Replace(`$text, '(?m)^alert\s', 'drop ')
     [IO.File]::WriteAllText('$RuleDir\agb-black-drop.rules', `$dropText, (New-Object Text.UTF8Encoding(`$false)))
 } catch {}
+`$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
+if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue }
 "@
     [IO.File]::WriteAllText($agbTaskScript, $agbBody, (New-Object Text.UTF8Encoding($false)))
     $agbAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$agbTaskScript`""
@@ -733,10 +739,10 @@ if ($SkipWazuhWiring) {
     }
 }
 
-# ---------- Step 14: install as an always-on Windows service (opt-in) ----------
-Log "Step 14/15: Windows service (opt-in)"
-if (-not $InstallService) {
-    Log "  skipped - pass -InstallService to register this as an always-on background service instead of a manual test"
+# ---------- Step 14: install as an always-on Windows service (default-on) ----------
+Log "Step 14/15: Windows service"
+if ($SkipService) {
+    Log "  skipped (-SkipService) - build stops at the manual/foreground-test stage"
 } else {
     # GOTCHA: Suricata's own --service-install hardcodes the service name
     # as "Suricata" (PROG_NAME, a compile-time constant in suricata.h, not
@@ -747,14 +753,23 @@ if (-not $InstallService) {
     # install-suricata-ips-service.ps1, inlined here for a one-command
     # build+run-as-service flow; that script still exists separately for
     # adding the service to an already-built deployment later.
+    #
+    # This step is ON by default (pass -SkipService to opt out), but still
+    # requires a typed YES confirmation unless -NoPrompt was also passed -
+    # this script is published in a shared repo other people may run, and
+    # continuous unattended inline blocking is a materially bigger
+    # commitment than the manual/supervised test every other step leads
+    # to, so a human still has to explicitly confirm it, every time,
+    # regardless of the default.
     Write-Host ""
     Write-Host "########################################################################" -ForegroundColor Red
-    Write-Host "#  WARNING: -InstallService registers a Windows SERVICE that auto-starts #" -ForegroundColor Red
-    Write-Host "#  on boot and runs Suricata in REAL INLINE TRAFFIC-BLOCKING mode        #" -ForegroundColor Red
+    Write-Host "#  WARNING: this step registers a Windows SERVICE that auto-starts on   #" -ForegroundColor Red
+    Write-Host "#  boot and runs Suricata in REAL INLINE TRAFFIC-BLOCKING mode           #" -ForegroundColor Red
     Write-Host "#  continuously, in the background, with no window to watch or Ctrl+C.   #" -ForegroundColor Red
     Write-Host "#  A crash, a bad rule, or unexpected blocking behavior would now affect  #" -ForegroundColor Red
     Write-Host "#  this machine's connectivity unattended, until you notice and stop it.  #" -ForegroundColor Red
     Write-Host "#  Only do this on a machine you've already tested thoroughly.            #" -ForegroundColor Red
+    Write-Host "#  Pass -SkipService to build without this step instead.                  #" -ForegroundColor Red
     Write-Host "########################################################################" -ForegroundColor Red
     Write-Host ""
     $svcConfirmed = $NoPrompt
@@ -763,7 +778,7 @@ if (-not $InstallService) {
         $svcConfirmed = ($ans -eq "YES")
     }
     if (-not $svcConfirmed) {
-        Log "  not confirmed - skipping service install (build itself is unaffected; re-run with -InstallService -NoPrompt to skip this prompt too)"
+        Log "  not confirmed - skipping service install (build itself is unaffected; re-run with -SkipService to skip this prompt entirely, or -NoPrompt to auto-confirm everything)"
     } else {
         $svcName = "SuricataIPS"
         $existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
@@ -819,14 +834,23 @@ if ($versionLine -and $wdLine -match "yes") {
     Write-Host "This is a SEPARATE, EXPERIMENTAL build - it has NOT touched your existing IDS-mode install." -ForegroundColor Yellow
 
     $rulesReady = Test-Path "$DeployRoot\suricata.yaml"
-    if ($rulesReady) {
+    $svcNowRunning = (Get-Service -Name "SuricataIPS" -ErrorAction SilentlyContinue).Status -eq 'Running'
+    if ($rulesReady -and $svcNowRunning) {
+        Write-Host ""
+        Write-Host "suricata.yaml + rules are ready, and the 'SuricataIPS' service is installed and" -ForegroundColor Green
+        Write-Host "RUNNING NOW (filter: $WinDivertFilter) - it auto-starts on boot from here on." -ForegroundColor Green
+        Write-Host "Check on it:   Get-Service SuricataIPS" -ForegroundColor Yellow
+        Write-Host "Stop it:       Stop-Service SuricataIPS" -ForegroundColor Yellow
+        Write-Host "Remove it:     .\install-suricata-ips-service.ps1 -Remove  (or -SkipService next build)" -ForegroundColor Yellow
+    } elseif ($rulesReady) {
         Write-Host ""
         Write-Host "suricata.yaml is ready. suricata.rules (ET Open, alert-only, visibility) and" -ForegroundColor Green
         Write-Host "agb-black-drop.rules (your curated blacklist, action drop - THIS actually blocks)" -ForegroundColor Green
         Write-Host "are both in place. Both refresh daily via the scheduled tasks (13:00 / 1:30 PM)." -ForegroundColor Green
         Write-Host ""
-        Write-Host "  NEXT STEP - test (Administrator, interactive - installs a kernel driver on" -ForegroundColor Yellow
-        Write-Host "  first use, so run this yourself, not unattended):" -ForegroundColor Yellow
+        Write-Host "  The always-on service was skipped (declined at the prompt, or -SkipService)." -ForegroundColor Yellow
+        Write-Host "  NEXT STEP - test manually instead (Administrator, interactive - installs a" -ForegroundColor Yellow
+        Write-Host "  kernel driver on first use, so run this yourself, not unattended):" -ForegroundColor Yellow
         Write-Host "    cd '$DeployRoot'" -ForegroundColor Yellow
         Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"outbound`"" -ForegroundColor Yellow
         Write-Host ""

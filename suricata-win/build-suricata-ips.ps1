@@ -764,12 +764,16 @@ if ($versionLine -and $wdLine -match "yes") {
         Write-Host "  NEXT STEP - test (Administrator, interactive - installs a kernel driver on" -ForegroundColor Yellow
         Write-Host "  first use, so run this yourself, not unattended):" -ForegroundColor Yellow
         Write-Host "    cd '$DeployRoot'" -ForegroundColor Yellow
-        Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"ip.DstAddr == 152.42.235.124`"" -ForegroundColor Yellow
+        Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"outbound`"" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "  Start narrow (one test IP, as above) before ever widening the filter -" -ForegroundColor Red
-        Write-Host "  agb-black-drop.rules is small and curated so this is far safer than the" -ForegroundColor Red
-        Write-Host "  earlier full-ET-Open-as-drop design, but it's still real inline blocking" -ForegroundColor Red
-        Write-Host "  you haven't tested on this exact hardware yet." -ForegroundColor Red
+        Write-Host "  'outbound' scopes to all outbound traffic rather than one specific test IP -" -ForegroundColor Yellow
+        Write-Host "  this is safe because only agb-black-drop.rules' small, curated signature set" -ForegroundColor Yellow
+        Write-Host "  can ever trigger an actual drop (the full ET Open ruleset stays alert-only)." -ForegroundColor Yellow
+        Write-Host "  A narrower single-IP filter was live-fire verified 2026-07-05 (genuine block +" -ForegroundColor Yellow
+        Write-Host "  correct eve.json logging) - if you want that safer starting point instead:" -ForegroundColor Yellow
+        Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"ip.DstAddr == 152.42.235.124`"" -ForegroundColor Yellow
+        Write-Host "  It's still real inline blocking on real traffic either way - test on a" -ForegroundColor Red
+        Write-Host "  disposable machine before ever considering this for a production agent." -ForegroundColor Red
     } else {
         Write-Host ""
         Write-Host "Rules/config setup was skipped or failed - deploy folder has only the bare" -ForegroundColor Yellow

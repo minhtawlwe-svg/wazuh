@@ -332,12 +332,12 @@ Both refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, 
 **Live-fire verified** (2026-07-05): ran `.\suricata.exe -c suricata.yaml --windivert "ip.DstAddr == <test IP>"`, then tried to reach that IP from another window — connection genuinely failed, `fast.log` showed `[Drop]`, and `eve.json` correctly reported `"action":"blocked"`.
 
 **What's still manual after the script finishes:**
-1. **Test with a narrow filter first** (Administrator, interactive — WinDivert installs a kernel driver on first use, so run this yourself, not unattended):
+1. **Test it** (Administrator, interactive — WinDivert installs a kernel driver on first use, so run this yourself, not unattended). The script's default suggestion uses `outbound` (all outbound traffic) as the filter scope:
    ```powershell
    cd C:\SuricataIPS
-   .\suricata.exe -c suricata.yaml --windivert "ip.DstAddr == 152.42.235.124"
+   .\suricata.exe -c suricata.yaml --windivert "outbound"
    ```
-   (substitute your own test C2 IP — this narrow filter only intercepts traffic to that one address, not your whole connection)
+   This is safe to widen because only `agb-black-drop.rules`' small, curated signature set can ever trigger an actual drop — the full ET Open ruleset stays alert-only regardless of filter scope. For an even narrower starting point (the one specifically live-fire verified), scope to a single test IP instead: `--windivert "ip.DstAddr == 152.42.235.124"`.
 2. **Test on a disposable machine first**, not this laptop or any production agent. Inline mode sits directly in the traffic path — a crash there can affect connectivity through that interface, a materially different risk profile than IDS-only.
 3. Pass `-SkipRulesSetup` if you only want the bare binary (e.g. to write your own curated rule set instead), `-SkipScheduledTask` to skip just the daily refresh tasks, or `-SkipWazuhWiring` to keep this build fully standalone even if a Wazuh agent is present.
 

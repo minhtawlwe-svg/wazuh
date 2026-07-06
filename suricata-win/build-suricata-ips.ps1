@@ -863,6 +863,10 @@ if ($SkipService) {
     Write-Host ""
     $svcConfirmed = $NoPrompt
     if (-not $svcConfirmed) {
+        # Give a beat to actually read the warning above before the prompt
+        # appears - especially easy to blow past on a fast re-run where
+        # every earlier step just says "already present, skipping".
+        Start-Sleep -Seconds 5
         $ans = Read-Host "Type YES to confirm you understand and want the always-on service (anything else skips it)"
         $svcConfirmed = ($ans -eq "YES")
     }

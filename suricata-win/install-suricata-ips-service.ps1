@@ -83,6 +83,7 @@ Write-Host "  inline enforcement of whatever is in that file, refreshed daily fr
 Write-Host ""
 
 if (-not $Force) {
+    Start-Sleep -Seconds 5
     $ans = Read-Host "Type YES (all caps) to confirm you understand and want to proceed"
     if ($ans -ne "YES") { Log "Not confirmed - exiting without changes."; exit 0 }
 }

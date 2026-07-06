@@ -173,6 +173,57 @@ if ($cerPath -and (Test-Path $cerPath)) {
     Write-Host "  [i] no defender-guard.cer found -- AMSI may flag scripts unless you sign them with sign-once.ps1." -ForegroundColor DarkYellow
 }
 
+# Exclude $psDir from Defender scanning BEFORE any files land in it.
+# Rationale: reenable-defender.ps1 / watchdog-service.ps1 manipulate
+# Set-MpPreference and Defender service state directly - exactly the shape
+# of behavior real-time protection's own heuristics look for, independent
+# of AMSI/signing. If Defender ever quarantines the watchdog's own script
+# file, every Scheduled Task pointing at it starts failing silently and
+# NOTHING re-enables Defender anymore if it's genuinely disabled - the one
+# script this project cannot afford to lose. Signing (above) stops AMSI
+# script-block blocking specifically; this stops real-time file scanning
+# more broadly, on file access as well as at scan time.
+#
+# GOTCHA (same one build-suricata-ips.ps1 hit): with Tamper Protection ON,
+# Add-MpPreference -ExclusionPath is silently ignored - Defender rejects
+# non-UI exclusion edits by design, the same protection that makes Layer 0
+# work in the first place. Detect this and hand off to the GUI instead of
+# reporting a false "added".
+$tamperProtected = $false
+try { $tamperProtected = [bool](Get-MpComputerStatus -ErrorAction Stop).IsTamperProtected } catch {}
+
+if ($tamperProtected) {
+    Write-Host ""
+    Write-Host "  [!] Tamper Protection is ON - Add-MpPreference cannot add a real exclusion" -ForegroundColor Yellow
+    Write-Host "      from a script on this machine (same protection that makes Layer 0 work)." -ForegroundColor Yellow
+    Write-Host "  ACTION NEEDED - add this folder as a Defender exclusion yourself:" -ForegroundColor Yellow
+    Write-Host "    $psDir" -ForegroundColor Yellow
+    Write-Host "  via Windows Security > Virus & threat protection > Manage settings >" -ForegroundColor Yellow
+    Write-Host "  Exclusions > Add or remove exclusions > Add an exclusion > Folder." -ForegroundColor Yellow
+    Write-Host "  (opening Windows Security now)" -ForegroundColor Yellow
+    Start-Process "windowsdefender://threatsettings" -ErrorAction SilentlyContinue | Out-Null
+    Write-Host ""
+    Read-Host "Press Enter once the folder is added as an exclusion (or to skip and proceed without it)"
+} else {
+    try { Add-MpPreference -ExclusionPath $psDir -ErrorAction Stop } catch {
+        Write-Host "  [i] could not add Defender exclusion for $psDir (non-fatal): $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+}
+
+$exclusionConfirmed = $false
+for ($i = 0; $i -lt 10; $i++) {
+    $current = (Get-MpPreference -ErrorAction SilentlyContinue).ExclusionPath
+    if ($current -contains $psDir) { $exclusionConfirmed = $true; break }
+    Start-Sleep -Milliseconds 500
+}
+if ($exclusionConfirmed) {
+    Write-Host "  [OK] Defender exclusion confirmed active: $psDir" -ForegroundColor Green
+} else {
+    Write-Host "  [i] Defender exclusion for $psDir not confirmed active - the watchdog scripts still" -ForegroundColor DarkYellow
+    Write-Host "      work without it (this is defense-in-depth, not a requirement), but if they ever" -ForegroundColor DarkYellow
+    Write-Host "      go missing, add manually: Add-MpPreference -ExclusionPath '$psDir'" -ForegroundColor DarkYellow
+}
+
 # Download / place files. Order matters: ensure both the standalone
 # scripts AND the Wazuh AR wrapper are present before task registration.
 Write-Host "Placing files..." -ForegroundColor Yellow

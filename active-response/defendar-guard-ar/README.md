@@ -78,7 +78,7 @@ The Wazuh manager AR is reactive (alert → manager → agent). Layer 1 + 2 reac
 
 ## 2. Quick Install — Agent side
 
-`install.ps1` does it all in one shot: downloads the four files, places them in the right folders, registers the two Scheduled Tasks, audits Tamper Protection, prints a summary.
+`install.ps1` does it all in one shot: trusts the publisher cert, excludes `C:\Program Files\Sysinternals\` from Defender scanning, downloads the four files, places them in the right folders, registers the two Scheduled Tasks, audits Tamper Protection, prints a summary.
 
 | File | Destination |
 |------|-------------|
@@ -89,6 +89,8 @@ The Wazuh manager AR is reactive (alert → manager → agent). Layer 1 + 2 reac
 | `tamper-protection-policy.xml` | `C:\Program Files\Sysinternals\` |
 
 After it finishes, do the **manager-side** config above, then restart the agent (`Restart-Service WazuhSvc`).
+
+> **Why exclude `C:\Program Files\Sysinternals\` from scanning at all?** `reenable-defender.ps1` and `watchdog-service.ps1` directly manipulate `Set-MpPreference` and the Defender service - exactly the behavior real-time protection's own heuristics watch for, independent of AMSI. If Defender ever quarantines the watchdog's own script file, every Scheduled Task pointing at it fails silently and nothing re-enables Defender if it's genuinely disabled - the one script this project can't afford to lose. Signing (below) stops AMSI script-block blocking specifically; the exclusion stops real-time file scanning more broadly. **Same Tamper Protection wall as everything else here**: if TP is ON, `Add-MpPreference -ExclusionPath` is silently ignored, so `install.ps1` detects this and opens Windows Security for you to add the exclusion manually (Virus & threat protection > Manage settings > Exclusions > Add or remove exclusions > Add an exclusion > Folder). This is defense-in-depth, not a hard requirement - skipping it still leaves Layers 0-3 intact.
 
 > **All three PowerShell lines matter.**
 > - Without line 1: `Invoke-RestMethod: Unable to read data from the transport connection` (PS 5.1 default is TLS 1.0/1.1; GitHub decommisioned those).

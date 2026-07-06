@@ -69,7 +69,9 @@ foreach ($taskName in @("AGB-Suricata-IPS-ET-Refresh", "AGB-Suricata-IPS-Rules-D
     }
 }
 
-# ---------- 0.5. SuricataIPS Windows service, if install-suricata-ips-service.ps1 was used ----------
+# ---------- 0.5. SuricataIPS Windows service, if ever installed (either via the
+# standalone install-suricata-ips-service.ps1, or build-suricata-ips.ps1's
+# -InstallService flag - both register under this same name) ----------
 $ipsSvc = Get-Service -Name "SuricataIPS" -ErrorAction SilentlyContinue
 if ($ipsSvc) {
     Act "stop + delete Windows service 'SuricataIPS' (status $($ipsSvc.Status)) - the always-on inline-blocking service"

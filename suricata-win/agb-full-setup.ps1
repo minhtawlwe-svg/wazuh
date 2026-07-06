@@ -197,9 +197,10 @@ if($rf -ge 0){
     $ylines = @($ylines[0..$rf]) + @('  - suricata.rules','  - agb-white.rules','  - agb-black.rules','  - agb-heuristics.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
     $y = $ylines -join "`r`n"
 }
-# JA3 fingerprinting is off by default (real per-flow CPU cost) - without
-# it, agb-heuristics.rules' ja3.hash rules load but can never match
-if($y -match '(?m)^(\s*)ja3-fingerprints:.*$'){ $y = Set-YamlKey $y 'ja3-fingerprints' 'yes' }
+# GOTCHA FIXED: stock yaml's ja3-fingerprints key is COMMENTED OUT by
+# default ("#ja3-fingerprints: auto"), not a live "no" - match that too
+if($y -match '(?m)^(\s*)#\s*ja3-fingerprints:.*$'){ $y = [regex]::Replace($y, '(?m)^(\s*)#\s*ja3-fingerprints:.*$', '${1}ja3-fingerprints: yes', 1) }
+elseif($y -match '(?m)^(\s*)ja3-fingerprints:.*$'){ $y = Set-YamlKey $y 'ja3-fingerprints' 'yes' }
 # disable eve-log 'stats' output - see project_c2_detection_engineering memory.
 # Suricata's periodic stats record has hundreds of nested numeric fields
 # (decoder.*, tcp.*, app_layer.*, flow.*); once flattened by Wazuh's generic

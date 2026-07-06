@@ -31,7 +31,7 @@
 [CmdletBinding()]
 param(
     [string]$SuricataVersion      = "suricata-8.0.3",     # git tag to build
-    [string]$WorkRoot             = "C:\msys64\home\$env:USERNAME\suricata-ips-build",
+    [string]$WorkRoot             = "C:\msys64\suricata-ips-build",
     [string]$DeployRoot           = "C:\SuricataIPS",       # final self-contained output
     [string]$NpcapUrl             = "https://npcap.com/dist/npcap-1.82.exe",
     [string]$HomeNet              = "",                     # blank = keep stock RFC1918
@@ -154,6 +154,14 @@ if ($SelectedAdapter) {
 # driver) is exactly the profile Defender flags, and it lives OUTSIDE
 # C:\msys64 entirely.
 Log "Step 0/15: Windows Defender exclusions"
+# Pre-create both folders (empty) before asking for the exclusion, so the
+# Windows Security "Add an exclusion > Folder" picker has a real, browsable
+# path to select on a completely fresh machine - it existing empty doesn't
+# weaken the protection ordering, since no actual content (MSYS2 packages,
+# the compiled binary) gets written into either folder until later steps,
+# well after the exclusion is confirmed active below.
+New-Item -ItemType Directory -Force -Path 'C:\msys64' | Out-Null
+New-Item -ItemType Directory -Force -Path $DeployRoot | Out-Null
 # GOTCHA FIXED: on machines with Tamper Protection ON, Add-MpPreference
 # silently fails to actually enforce exclusion changes - Defender
 # deliberately ignores/reverts exclusion edits made via PowerShell (or any
@@ -568,17 +576,22 @@ if (-not $SkipRulesSetup) {
         }
         $y = Set-YamlKeyIps $y 'classification-file'    ("'{0}\classification.config'" -f $DeployRoot)
         $y = Set-YamlKeyIps $y 'reference-config-file'  ("'{0}\reference.config'" -f $DeployRoot)
-        # GOTCHA: JA3 TLS fingerprint hashing is off by default (a real
-        # per-flow CPU cost Suricata doesn't pay unless asked to) - without
-        # this, agb-heuristics.rules' ja3.hash rules load fine but can
-        # never match anything, silently. Stock yaml already has this key
-        # under app-layer.protocols.tls; Set-YamlKeyIps only replaces an
-        # existing key so this is a no-op (with a warning) if that
-        # assumption doesn't hold on a future Suricata version's stock yaml.
-        if ($y -match '(?m)^(\s*)ja3-fingerprints:.*$') {
+        # GOTCHA FIXED: the stock yaml's ja3-fingerprints key is COMMENTED
+        # OUT by default ("#ja3-fingerprints: auto"), not present as a live
+        # "no" value - the original regex only matched an uncommented line
+        # starting with whitespace, so it silently never found this key at
+        # all on a real build. "auto" (the compiled-in default when the
+        # line is absent/commented) is documented in the yaml itself as
+        # "disabled by default, but enabled if rules require it" - meaning
+        # agb-heuristics.rules' ja3.hash rules may already trigger it
+        # automatically - but force it to an explicit "yes" anyway for
+        # certainty rather than relying on that auto-detection.
+        if ($y -match '(?m)^(\s*)#\s*ja3-fingerprints:.*$') {
+            $y = [regex]::Replace($y, '(?m)^(\s*)#\s*ja3-fingerprints:.*$', '${1}ja3-fingerprints: yes', 1)
+        } elseif ($y -match '(?m)^(\s*)ja3-fingerprints:.*$') {
             $y = Set-YamlKeyIps $y 'ja3-fingerprints' 'yes'
         } else {
-            Warn "  ja3-fingerprints key not found in stock suricata.yaml - JA3 rules in agb-heuristics.rules will not match anything until this is enabled manually"
+            Warn "  ja3-fingerprints key not found (commented or not) in stock suricata.yaml - JA3 rules in agb-heuristics.rules may not match anything until this is enabled manually"
         }
         # rule-files -> agb-white.rules (pass) + ET Open (alert) + agb-black-drop (drop)
         # GOTCHA FIXED: agb-white.rules (the pass-rule whitelist that

@@ -31,8 +31,17 @@ param(
     [switch]$RemoveWazuhAgent,
     [switch]$WhatIfOnly,
     [string]$DeployRoot = "C:\SuricataIPS",
-    [string]$IpsWorkRoot = "C:\msys64\home\$env:USERNAME\suricata-ips-build"
+    [string]$IpsWorkRoot = "C:\msys64\suricata-ips-build"
 )
+
+# GOTCHA: the build workspace default path changed (2026-07-06) from
+# C:\msys64\home\<username>\suricata-ips-build to the fixed
+# C:\msys64\suricata-ips-build above, because autotools-based builds
+# (Suricata's ./configure/make) break on paths containing spaces, and a
+# Windows username with a space in it (a very ordinary real name, e.g.
+# "Tin Aung Cho") silently broke the whole build. Check the OLD
+# convention too so builds from before this fix still get cleaned up.
+$IpsWorkRootLegacy = "C:\msys64\home\$env:USERNAME\suricata-ips-build"
 
 $ErrorActionPreference = 'Continue'
 function Log($m) { Write-Host "[uninstall-all] $m" -ForegroundColor Cyan }
@@ -47,7 +56,7 @@ function Warn($m) { Write-Host "[uninstall-all] WARN: $m" -ForegroundColor Yello
 # itself remains, and the final POST-CLEAN report still shows it present.
 # cd out to somewhere safe first if that's the case.
 $cwd = (Get-Location).Path
-foreach ($protectedPath in @($DeployRoot, $IpsWorkRoot)) {
+foreach ($protectedPath in @($DeployRoot, $IpsWorkRoot, $IpsWorkRootLegacy)) {
     if ($cwd -eq $protectedPath -or $cwd.StartsWith("$protectedPath\", [StringComparison]::OrdinalIgnoreCase)) {
         Warn "Current directory ($cwd) is inside a folder this script is about to delete - moving to $env:TEMP first so the delete can fully complete."
         Set-Location $env:TEMP
@@ -155,12 +164,14 @@ if (Test-Path $DeployRoot) {
 }
 
 # ---------- 3. IPS build workspace (source, WinDivert zip, Npcap SDK, Rust target dir) ----------
-if (Test-Path $IpsWorkRoot) {
-    $sz = (Get-ChildItem $IpsWorkRoot -Recurse -ErrorAction SilentlyContinue -File | Measure-Object Length -Sum).Sum
-    Act "delete $IpsWorkRoot ($([math]::Round($sz/1MB,1)) MB) - Suricata source tree, Rust build cache, WinDivert/Npcap SDK downloads"
-    if (-not $WhatIfOnly) { Remove-Item $IpsWorkRoot -Recurse -Force -ErrorAction SilentlyContinue }
-} else {
-    Log "no IPS build workspace at $IpsWorkRoot"
+foreach ($workPath in @($IpsWorkRoot, $IpsWorkRootLegacy) | Select-Object -Unique) {
+    if (Test-Path $workPath) {
+        $sz = (Get-ChildItem $workPath -Recurse -ErrorAction SilentlyContinue -File | Measure-Object Length -Sum).Sum
+        Act "delete $workPath ($([math]::Round($sz/1MB,1)) MB) - Suricata source tree, Rust build cache, WinDivert/Npcap SDK downloads"
+        if (-not $WhatIfOnly) { Remove-Item $workPath -Recurse -Force -ErrorAction SilentlyContinue }
+    } else {
+        Log "no IPS build workspace at $workPath"
+    }
 }
 
 # ---------- 4. MSYS2 itself (opt-in only - it's a general dev toolchain) ----------
@@ -193,7 +204,7 @@ if ($AlsoRemoveMsys2) {
 Write-Host ""
 Log "================ POST-CLEAN STATE ================"
 "  IPS deploy folder ($DeployRoot)     : " + (Test-Path $DeployRoot)
-"  IPS build workspace                 : " + (Test-Path $IpsWorkRoot)
+"  IPS build workspace                 : " + ((Test-Path $IpsWorkRoot) -or (Test-Path $IpsWorkRootLegacy))
 "  IPS scheduled tasks remaining       : " + ((@("AGB-Suricata-IPS-ET-Refresh","AGB-Suricata-IPS-Rules-Deploy") | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }) -join ', ')
 "  MSYS2 (C:\msys64) kept              : " + (Test-Path 'C:\msys64')
 "  WinDivert driver services remaining : " + ((@("WinDivert","WinDivert1.4","WinDivert1.2") | Where-Object { Get-Service -Name $_ -ErrorAction SilentlyContinue }) -join ', ')

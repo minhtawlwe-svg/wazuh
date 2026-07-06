@@ -69,6 +69,16 @@ foreach ($taskName in @("AGB-Suricata-IPS-ET-Refresh", "AGB-Suricata-IPS-Rules-D
     }
 }
 
+# ---------- 0.5. SuricataIPS Windows service, if install-suricata-ips-service.ps1 was used ----------
+$ipsSvc = Get-Service -Name "SuricataIPS" -ErrorAction SilentlyContinue
+if ($ipsSvc) {
+    Act "stop + delete Windows service 'SuricataIPS' (status $($ipsSvc.Status)) - the always-on inline-blocking service"
+    if (-not $WhatIfOnly) {
+        if ($ipsSvc.Status -eq 'Running') { Stop-Service -Name "SuricataIPS" -Force -ErrorAction SilentlyContinue }
+        & sc.exe delete "SuricataIPS" | Out-Null
+    }
+}
+
 # ---------- 1. WinDivert kernel driver, if it was ever registered ----------
 # WinDivert self-installs a kernel driver the FIRST time --windivert is
 # actually run (not just built) - typically registered as service name
@@ -159,6 +169,7 @@ Log "================ POST-CLEAN STATE ================"
 "  IPS scheduled tasks remaining       : " + ((@("AGB-Suricata-IPS-ET-Refresh","AGB-Suricata-IPS-Rules-Deploy") | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue }) -join ', ')
 "  MSYS2 (C:\msys64) kept              : " + (Test-Path 'C:\msys64')
 "  WinDivert driver services remaining : " + ((@("WinDivert","WinDivert1.4","WinDivert1.2") | Where-Object { Get-Service -Name $_ -ErrorAction SilentlyContinue }) -join ', ')
+"  SuricataIPS service kept            : " + [bool](Get-Service -Name "SuricataIPS" -ErrorAction SilentlyContinue)
 "  Npcap kept                          : " + [bool](Get-Service npcap -ErrorAction SilentlyContinue)
 "  Wazuh agent kept                    : " + [bool](Get-Service WazuhSvc -ErrorAction SilentlyContinue)
 if ($WhatIfOnly) { Log "WhatIf only - nothing was changed." } else { Log "ALL SURICATA (IDS + IPS) UNINSTALL DONE." }

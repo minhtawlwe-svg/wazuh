@@ -27,7 +27,8 @@ No external installer dependency. Portable across any user account (machine-wide
 | [`Test-SuricataAlerts.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/Test-SuricataAlerts.ps1) | on-demand alert test (injects WAZUH-TEST rules, fires traffic, confirms) |
 | [`wazuh-manager/`](https://github.com/minhtawlwe-svg/wazuh/tree/git-home/suricata-win/wazuh-manager) | **manager-side** files (see [Manager-side setup](#manager-side-setup) below) — deployed ONCE on the Wazuh manager, not per-agent |
 | [`build-suricata-ips.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/build-suricata-ips.ps1) | **experimental, separate** — builds Suricata from source with real inline IPS/blocking support (WinDivert), which the official MSI above does not have. See [Suricata IPS mode (WinDivert)](#suricata-ips-mode-windivert) below |
-| [`uninstall-all-suricata.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall-all-suricata.ps1) | removes **everything** — both the IDS install (by calling `agb-full-uninstall.ps1`) and the IPS build (deploy folder, build workspace, WinDivert driver if registered) |
+| [`uninstall-all-suricata.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/uninstall-all-suricata.ps1) | removes **everything** — both the IDS install (by calling `agb-full-uninstall.ps1`) and the IPS build (deploy folder, build workspace, WinDivert driver, `SuricataIPS` service, and Wazuh wiring if present) |
+| [`install-suricata-ips-service.ps1`](https://github.com/minhtawlwe-svg/wazuh/blob/git-home/suricata-win/install-suricata-ips-service.ps1) | **optional, separate, higher-risk** — registers the IPS build as a persistent Windows service (auto-starts on boot, runs continuously). Everything else keeps it manual/supervised on purpose; see [Running it continuously](#running-it-continuously-optional-higher-risk) below |
 
 > **Run everything from an Administrator PowerShell** (Win+X → *Terminal (Admin)*). Both entry-point scripts declare `#Requires -RunAsAdministrator`.
 
@@ -343,11 +344,29 @@ Both refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, 
 
 A full narrative write-up of the entire build (including every error exactly as it happened) exists as a Word document generated during development — ask for `Suricata-IPS-Mode-Build-Guide.docx` if you need the long-form version with screenshots-equivalent detail. Note it was written before several of the fixes above landed, so the script's own inline comments are the more current source of truth.
 
+### Running it continuously (optional, higher risk)
+
+Everything above (`build-suricata-ips.ps1`) deliberately stops at a manual, supervised foreground test — you start it, watch it, and `Ctrl+C` it. That's on purpose: it's real inline traffic blocking, and staying supervised means you can stop it instantly if anything looks wrong.
+
+**Making it auto-start on boot and run continuously in the background is a meaningfully bigger commitment** — no window to watch, no easy stop button if a rule misfires or it crashes. Only do this on a machine you've already tested thoroughly, ideally a disposable one, not something you depend on for daily use.
+
+If you still want that:
+```powershell
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/install-suricata-ips-service.ps1 -UseBasicParsing | iex
+```
+Prompts for an explicit `YES` confirmation (repeating the warning above) before doing anything. Registers a Windows service named **`SuricataIPS`** — deliberately *not* the generic `Suricata` name Suricata's own `--service-install` would use internally (that name is a hardcoded compile-time constant, not configurable, and could collide with a regular IDS-mode Suricata service if one's ever added on the same machine). Auto-starts on boot, restarts itself on crash (via `sc.exe failure`), uses the same `outbound` filter the build script suggests by default (override with `-WinDivertFilter`).
+
+```powershell
+Get-Service SuricataIPS      # check status
+Stop-Service SuricataIPS     # stop without uninstalling
+```
+To remove it: `.\install-suricata-ips-service.ps1 -Remove` (or run `uninstall-all-suricata.ps1`, which also cleans this up).
+
 ### Removing the IPS build (and/or everything else)
 ```powershell
 [Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-all-suricata.ps1 -UseBasicParsing | iex
 ```
-Removes the IPS deploy folder (`C:\SuricataIPS\`), the build workspace (source tree, Rust cache, downloaded SDKs), and the WinDivert kernel driver if it was ever registered — **and** runs `agb-full-uninstall.ps1` for the IDS-mode install, so this one command tears down both. MSYS2 itself is kept by default (pass `-AlsoRemoveMsys2` to remove the whole toolchain, not just this project's use of it) since it's a general-purpose dev environment, not Suricata-specific.
+Removes the IPS deploy folder (`C:\SuricataIPS\`), the build workspace (source tree, Rust cache, downloaded SDKs), the `SuricataIPS` service if installed, the Wazuh `ossec.conf` wiring if present, and the WinDivert kernel driver if it was ever registered — **and** runs `agb-full-uninstall.ps1` for the IDS-mode install, so this one command tears down everything. MSYS2 itself is kept by default (pass `-AlsoRemoveMsys2` to remove the whole toolchain, not just this project's use of it) since it's a general-purpose dev environment, not Suricata-specific.
 
 ---
 

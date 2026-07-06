@@ -568,12 +568,21 @@ if (-not $SkipRulesSetup) {
         }
         $y = Set-YamlKeyIps $y 'classification-file'    ("'{0}\classification.config'" -f $DeployRoot)
         $y = Set-YamlKeyIps $y 'reference-config-file'  ("'{0}\reference.config'" -f $DeployRoot)
-        # rule-files -> ET Open (alert) + agb-black-drop (drop)
+        # rule-files -> agb-white.rules (pass) + ET Open (alert) + agb-black-drop (drop)
+        # GOTCHA FIXED: agb-white.rules (the pass-rule whitelist that
+        # suppresses known-good noise like *.agb.mywire.org DYN_DNS alerts)
+        # was never included here at all - only agb-full-setup.ps1's IDS
+        # deployment loaded it. Confirmed on a live run: the exact pass
+        # rule needed already existed in the repo (sid:1000010) but never
+        # got a chance to apply since this build didn't download or list
+        # the file. Suricata's action-order (pass before alert/drop by
+        # default) means list position doesn't matter for precedence, only
+        # that the file is actually loaded at all.
         $ylines = $y -split "`r?`n"
         $rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }
         if($rf -ge 0){
             $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
-            $ylines = @($ylines[0..$rf]) + @('  - suricata.rules','  - agb-black-drop.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+            $ylines = @($ylines[0..$rf]) + @('  - agb-white.rules','  - suricata.rules','  - agb-black-drop.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
             $y = $ylines -join "`r`n"
         }
         # same eve-log stats overflow fix as agb-full-setup.ps1 - see that
@@ -589,6 +598,15 @@ if (-not $SkipRulesSetup) {
         }
         [IO.File]::WriteAllText("$DeployRoot\suricata.yaml", $y, $utf8NoBom)
         Log "  suricata.yaml written ($DeployRoot\suricata.yaml)"
+
+        Log "  downloading agb-white.rules (pass rules, unmodified)..."
+        try {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-white.rules" -OutFile "$RuleDir\agb-white.rules" -UseBasicParsing
+            $passCount = ([regex]::Matches([IO.File]::ReadAllText("$RuleDir\agb-white.rules"), '(?m)^\s*pass\s')).Count
+            Log "  wrote $RuleDir\agb-white.rules ($passCount pass signatures)"
+        } catch {
+            Warn "  could not download agb-white.rules ($($_.Exception.Message)) - known-good traffic (e.g. *.agb.mywire.org) will alert/log normally instead of being suppressed"
+        }
 
         Log "  downloading ET Open ruleset (action: alert, unconverted)..."
         $etOk = Get-EtOpenRuleset -suricataExe "$DeployRoot\suricata.exe" -destPath "$RuleDir\suricata.rules" -workDir $WorkRoot
@@ -660,8 +678,9 @@ if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS'
     Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-ET-Refresh' -Action $etAction -Trigger $etTrigger -Principal $etPrincipal -Force | Out-Null
     Log "  scheduled task 'AGB-Suricata-IPS-ET-Refresh' registered - daily 13:00 as SYSTEM"
 
-    # --- Task B: agb-black.rules refresh + drop-conversion, 1:30 PM daily
-    # (matches the IDS deployment's "AGB-Suricata-Rules-Deploy" timing) ---
+    # --- Task B: agb-black.rules (drop-converted) + agb-white.rules refresh,
+    # 1:30 PM daily (matches the IDS deployment's "AGB-Suricata-Rules-Deploy"
+    # timing) ---
     $agbTaskScript = "$IpsScriptsDir\refresh-agb-black-drop.ps1"
     $agbBody = @"
 `$ErrorActionPreference = 'Continue'
@@ -672,6 +691,9 @@ try {
     `$dropText = [regex]::Replace(`$text, '(?m)^alert\s', 'drop ')
     [IO.File]::WriteAllText('$RuleDir\agb-black-drop.rules', `$dropText, (New-Object Text.UTF8Encoding(`$false)))
 } catch {}
+try {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-white.rules" -OutFile '$RuleDir\agb-white.rules' -UseBasicParsing
+} catch {}
 `$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
 if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue }
 "@
@@ -680,7 +702,7 @@ if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS'
     $agbTrigger   = New-ScheduledTaskTrigger -Daily -At '1:30PM'
     $agbPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
     Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-Rules-Deploy' -Action $agbAction -Trigger $agbTrigger -Principal $agbPrincipal -Force | Out-Null
-    Log "  scheduled task 'AGB-Suricata-IPS-Rules-Deploy' registered - daily 1:30 PM as SYSTEM"
+    Log "  scheduled task 'AGB-Suricata-IPS-Rules-Deploy' registered - daily 1:30 PM as SYSTEM (refreshes agb-black-drop.rules and agb-white.rules)"
 } else {
     Log "  skipped (-SkipScheduledTask, or Step 10 rules setup did not complete)"
 }
@@ -844,9 +866,10 @@ if ($versionLine -and $wdLine -match "yes") {
         Write-Host "Remove it:     .\install-suricata-ips-service.ps1 -Remove  (or -SkipService next build)" -ForegroundColor Yellow
     } elseif ($rulesReady) {
         Write-Host ""
-        Write-Host "suricata.yaml is ready. suricata.rules (ET Open, alert-only, visibility) and" -ForegroundColor Green
-        Write-Host "agb-black-drop.rules (your curated blacklist, action drop - THIS actually blocks)" -ForegroundColor Green
-        Write-Host "are both in place. Both refresh daily via the scheduled tasks (13:00 / 1:30 PM)." -ForegroundColor Green
+        Write-Host "suricata.yaml is ready. agb-white.rules (pass, suppresses known-good noise)," -ForegroundColor Green
+        Write-Host "suricata.rules (ET Open, alert-only, visibility), and agb-black-drop.rules" -ForegroundColor Green
+        Write-Host "(your curated blacklist, action drop - THIS actually blocks) are all in place." -ForegroundColor Green
+        Write-Host "All refresh daily via the scheduled tasks (13:00 / 1:30 PM)." -ForegroundColor Green
         Write-Host ""
         Write-Host "  The always-on service was skipped (declined at the prompt, or -SkipService)." -ForegroundColor Yellow
         Write-Host "  NEXT STEP - test manually instead (Administrator, interactive - installs a" -ForegroundColor Yellow

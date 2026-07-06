@@ -325,10 +325,11 @@ Suricata has a real inline/IPS capture mode using a driver called **WinDivert**,
 **Rules are deliberately split — only your curated blacklist actually blocks:**
 | File | Source | Action | Effect |
 | --- | --- | --- | --- |
+| `rules\agb-white.rules` | Your `agb-white.rules` (same whitelist the IDS deployment uses) | `pass` (unmodified) | Suppresses known-good noise (e.g. `*.agb.mywire.org` DYN_DNS alerts) before it ever reaches the ET ruleset |
 | `rules\suricata.rules` | Full ET Open ruleset (~50,000 signatures) | `alert` (unmodified) | Visibility only — logs, never blocks. Most ET signatures are tuned for alerting, not blocking; converting the entire IDS ruleset to blocking would be genuinely risky (noisy/informational signatures false-positiving on legitimate traffic) |
 | `rules\agb-black-drop.rules` | Your `agb-black.rules` (same blacklist the IDS deployment auto-kills on) | `drop` (converted from `alert`) | **Actually blocks** — the same small, deliberate, already-trusted IOC set, now enforced inline instead of via the Wazuh Active Response round-trip |
 
-Both refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, `AGB-Suricata-IPS-Rules-Deploy` at 1:30 PM — same times as the IDS deployment's equivalents). If the `SuricataIPS` service is running, both tasks also restart it after refreshing — otherwise a continuously-running instance would keep enforcing stale rules indefinitely, silently defeating the point of a daily refresh.
+All three refresh daily via scheduled tasks (`AGB-Suricata-IPS-ET-Refresh` at 13:00, `AGB-Suricata-IPS-Rules-Deploy` at 1:30 PM — same times as the IDS deployment's equivalents). If the `SuricataIPS` service is running, both tasks also restart it after refreshing — otherwise a continuously-running instance would keep enforcing stale rules indefinitely, silently defeating the point of a daily refresh.
 
 **Live-fire verified** (2026-07-05): ran `.\suricata.exe -c suricata.yaml --windivert "ip.DstAddr == <test IP>"`, then tried to reach that IP from another window — connection genuinely failed, `fast.log` showed `[Drop]`, and `eve.json` correctly reported `"action":"blocked"`.
 

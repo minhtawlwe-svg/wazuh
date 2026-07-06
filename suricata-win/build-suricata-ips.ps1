@@ -45,7 +45,7 @@ param(
     [switch]$SkipWazuhWiring,                              # skip Step 13 - don't touch the Wazuh agent's ossec.conf
     [switch]$SkipService,                                  # skip Step 14 - by default this build registers as an always-on service (see the warning it prints; still requires a typed YES unless -NoPrompt)
     [string]$WinDivertFilter      = "outbound",            # filter used by the Step 14 service
-    [switch]$BlockTor                                      # convert ET TOR node-IP signatures to drop (blocks Tor network access entirely, not just .onion - opt-in, not everyone wants this policy)
+    [switch]$SkipTorBlock                                  # by default, ET TOR node-IP signatures are converted to drop (blocks Tor network access, not just .onion) - pass this to keep them alert-only instead
 )
 
 $ErrorActionPreference = "Stop"
@@ -609,7 +609,7 @@ if (-not $SkipRulesSetup) {
         if($rf -ge 0){
             $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
             $ruleFileList = @('  - agb-white.rules','  - suricata.rules','  - agb-black-drop.rules','  - agb-heuristics.rules')
-            if ($BlockTor) { $ruleFileList += '  - agb-tor-drop.rules' }
+            if (-not $SkipTorBlock) { $ruleFileList += '  - agb-tor-drop.rules' }
             $ylines = @($ylines[0..$rf]) + $ruleFileList + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
             $y = $ylines -join "`r`n"
         }
@@ -642,7 +642,7 @@ if (-not $SkipRulesSetup) {
             $sigCount = ([regex]::Matches([IO.File]::ReadAllText("$RuleDir\suricata.rules"), '(?m)^\s*alert\s')).Count
             Log "  wrote $RuleDir\suricata.rules ($sigCount alert signatures - visibility only, does not block)"
 
-            if ($BlockTor) {
+            if (-not $SkipTorBlock) {
                 # GOTCHA: a DNS-query rule for .onion (agb-black.rules
                 # sid:1000102) can NEVER catch real Tor Browser usage - Tor
                 # resolves .onion internally through its own encrypted
@@ -657,7 +657,13 @@ if (-not $SkipRulesSetup) {
                 # from suricata.rules afterward so the same SID doesn't
                 # load twice (once as alert, once as drop) across two rule
                 # files, which Suricata would reject.
-                Log "  -BlockTor: extracting ET TOR node-IP signatures and converting to drop..."
+                # Default ON as of 2026-07-06 (was opt-in -BlockTor) - the
+                # download-first invocation needed to pass a custom switch
+                # was tripping people up who kept running the plain
+                # iwr|iex one-liner instead, which can never pass
+                # parameters. Pass -SkipTorBlock to keep Tor traffic
+                # alert-only instead (e.g. for legitimate research use).
+                Log "  extracting ET TOR node-IP signatures and converting to drop (pass -SkipTorBlock to disable)..."
                 $allEt = [IO.File]::ReadAllText("$RuleDir\suricata.rules")
                 $etLines = $allEt -split "`r?`n"
                 $torLines = $etLines | Where-Object { $_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
@@ -668,7 +674,7 @@ if (-not $SkipRulesSetup) {
                     [IO.File]::WriteAllText("$RuleDir\suricata.rules", ($keptLines -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
                     Log "  wrote $RuleDir\agb-tor-drop.rules ($($torLines.Count) Tor node-IP signatures converted to drop - blocks Tor network connections, not just .onion)"
                 } else {
-                    Warn "  -BlockTor was passed but no ET TOR signatures were found in the downloaded ruleset - nothing to convert"
+                    Warn "  no ET TOR signatures were found in the downloaded ruleset - nothing to convert"
                 }
             }
         } else {
@@ -734,7 +740,7 @@ function Get-EtOpenRuleset([string]`$suricataExe, [string]`$destPath, [string]`$
     [IO.File]::WriteAllText(`$destPath, `$sb.ToString(), (New-Object Text.UTF8Encoding(`$false)))
 }
 Get-EtOpenRuleset -suricataExe '$DeployRoot\suricata.exe' -destPath '$RuleDir\suricata.rules' -workDir '$WorkRoot'
-$(if ($BlockTor) {
+$(if (-not $SkipTorBlock) {
 @"
 `$allEt = [IO.File]::ReadAllText('$RuleDir\suricata.rules')
 `$etLines = `$allEt -split "``r?``n"
@@ -999,9 +1005,9 @@ if ($versionLine -and $wdLine -match "yes") {
         Write-Host "(your curated blacklist, action drop - THIS actually blocks) are all in place." -ForegroundColor Green
         Write-Host "All refresh daily via the scheduled tasks (13:00 / 1:30 PM)." -ForegroundColor Green
         if (Test-Path "$RuleDir\agb-tor-drop.rules") {
-            Write-Host "agb-tor-drop.rules is also in place (-BlockTor) - blocks connections to known" -ForegroundColor Green
-            Write-Host "Tor relay/exit nodes, not just .onion DNS queries (which real Tor Browser" -ForegroundColor Green
-            Write-Host "traffic never generates in the first place)." -ForegroundColor Green
+            Write-Host "agb-tor-drop.rules is also in place - blocks connections to known Tor relay/exit" -ForegroundColor Green
+            Write-Host "nodes, not just .onion DNS queries (which real Tor Browser traffic never" -ForegroundColor Green
+            Write-Host "generates in the first place). Pass -SkipTorBlock next build to disable this." -ForegroundColor Green
         }
         Write-Host ""
         Write-Host "  The always-on service was skipped (declined at the prompt, or -SkipService)." -ForegroundColor Yellow

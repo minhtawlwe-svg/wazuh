@@ -7,7 +7,7 @@
 # One-shot invocation (elevated PowerShell on the Wazuh agent):
 #
 #   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-#   irm https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1
+#   irm https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/active-response/defendar-guard-ar/install.ps1 -OutFile $env:TEMP\install.ps1
 #   Unblock-File $env:TEMP\install.ps1
 #   & "$env:TEMP\install.ps1"
 
@@ -15,7 +15,7 @@ $ErrorActionPreference = "Stop"
 
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
-$base   = "https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar"
+$base   = "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/active-response/defendar-guard-ar"
 $binDir = "C:\Program Files (x86)\ossec-agent\active-response\bin"
 $psDir  = "C:\Program Files\Sysinternals"
 

@@ -18,7 +18,7 @@
 $stamp   = Get-Date -Format 'yyyyMMddHHmmss'
 $destDir = Join-Path $env:TEMP "defender-guard-$stamp"
 New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-irm "https://raw.githubusercontent.com/yekyawhan/wazuh/git-home/active-response/defendar-guard-ar/install.ps1?v=$stamp" -OutFile "$destDir\install.ps1"
+irm "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/active-response/defendar-guard-ar/install.ps1?v=$stamp" -OutFile "$destDir\install.ps1"
 Unblock-File "$destDir\install.ps1"
 & "$destDir\install.ps1"
 ```

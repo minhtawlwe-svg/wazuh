@@ -39,6 +39,22 @@ function Log($m) { Write-Host "[uninstall-all] $m" -ForegroundColor Cyan }
 function Act($m) { if ($WhatIfOnly) { Write-Host "  WOULD: $m" -ForegroundColor Yellow } else { Write-Host "  $m" } }
 function Warn($m) { Write-Host "[uninstall-all] WARN: $m" -ForegroundColor Yellow }
 
+# GOTCHA: Windows can't fully delete a directory that's the current
+# process's working directory - if this script is run from inside
+# $DeployRoot or $IpsWorkRoot (e.g. "cd C:\SuricataIPS" then running the
+# uninstaller from there), Remove-Item -Recurse -Force silently only
+# partially completes: file contents get removed but the top-level folder
+# itself remains, and the final POST-CLEAN report still shows it present.
+# cd out to somewhere safe first if that's the case.
+$cwd = (Get-Location).Path
+foreach ($protectedPath in @($DeployRoot, $IpsWorkRoot)) {
+    if ($cwd -eq $protectedPath -or $cwd.StartsWith("$protectedPath\", [StringComparison]::OrdinalIgnoreCase)) {
+        Warn "Current directory ($cwd) is inside a folder this script is about to delete - moving to $env:TEMP first so the delete can fully complete."
+        Set-Location $env:TEMP
+        break
+    }
+}
+
 Write-Host "===== PART 1/2: IDS-mode Suricata (agb-full-uninstall.ps1) =====" -ForegroundColor Green
 # Downloaded and run rather than duplicated here, so this always matches
 # whatever the real IDS uninstaller currently does - no risk of the two
@@ -91,7 +107,17 @@ foreach ($svcName in @("WinDivert", "WinDivert1.4", "WinDivert1.2")) {
     if ($svc) {
         Act "stop + delete WinDivert kernel driver service '$svcName' (status $($svc.Status))"
         if (-not $WhatIfOnly) {
-            Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+            # GOTCHA: Stop-Service can throw "Cannot open X service" for a
+            # KERNEL_DRIVER-type service even with -ErrorAction
+            # SilentlyContinue - the underlying exception isn't always
+            # routed through PowerShell's normal error-record pipeline, so
+            # the -ErrorAction parameter doesn't reliably suppress it.
+            # sc.exe stop (used successfully elsewhere in this repo for
+            # the same driver) handles kernel drivers correctly; try/catch
+            # as a second layer of safety since deleting it right after
+            # works regardless of whether the stop itself succeeded.
+            try { & sc.exe stop $svcName 2>&1 | Out-Null } catch {}
+            Start-Sleep -Milliseconds 500
             & sc.exe delete $svcName | Out-Null
         }
     }

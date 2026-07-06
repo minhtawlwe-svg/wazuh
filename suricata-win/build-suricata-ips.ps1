@@ -44,7 +44,8 @@ param(
     [switch]$SkipScheduledTask,                            # skip Step 12 - no daily rule refresh
     [switch]$SkipWazuhWiring,                              # skip Step 13 - don't touch the Wazuh agent's ossec.conf
     [switch]$SkipService,                                  # skip Step 14 - by default this build registers as an always-on service (see the warning it prints; still requires a typed YES unless -NoPrompt)
-    [string]$WinDivertFilter      = "outbound"             # filter used by the Step 14 service
+    [string]$WinDivertFilter      = "outbound",            # filter used by the Step 14 service
+    [switch]$BlockTor                                      # convert ET TOR node-IP signatures to drop (blocks Tor network access entirely, not just .onion - opt-in, not everyone wants this policy)
 )
 
 $ErrorActionPreference = "Stop"
@@ -607,7 +608,9 @@ if (-not $SkipRulesSetup) {
         $rf=-1; for($i=0;$i -lt $ylines.Count;$i++){ if($ylines[$i] -match '^\s*rule-files:\s*$'){ $rf=$i; break } }
         if($rf -ge 0){
             $j=$rf+1; while($j -lt $ylines.Count -and $ylines[$j] -match '^\s*#?\s*-\s'){ $j++ }
-            $ylines = @($ylines[0..$rf]) + @('  - agb-white.rules','  - suricata.rules','  - agb-black-drop.rules','  - agb-heuristics.rules') + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
+            $ruleFileList = @('  - agb-white.rules','  - suricata.rules','  - agb-black-drop.rules','  - agb-heuristics.rules')
+            if ($BlockTor) { $ruleFileList += '  - agb-tor-drop.rules' }
+            $ylines = @($ylines[0..$rf]) + $ruleFileList + @($(if($j -le $ylines.Count-1){$ylines[$j..($ylines.Count-1)]}else{@()}))
             $y = $ylines -join "`r`n"
         }
         # same eve-log stats overflow fix as agb-full-setup.ps1 - see that
@@ -638,6 +641,36 @@ if (-not $SkipRulesSetup) {
         if ($etOk) {
             $sigCount = ([regex]::Matches([IO.File]::ReadAllText("$RuleDir\suricata.rules"), '(?m)^\s*alert\s')).Count
             Log "  wrote $RuleDir\suricata.rules ($sigCount alert signatures - visibility only, does not block)"
+
+            if ($BlockTor) {
+                # GOTCHA: a DNS-query rule for .onion (agb-black.rules
+                # sid:1000102) can NEVER catch real Tor Browser usage - Tor
+                # resolves .onion internally through its own encrypted
+                # circuit protocol, never generating a plain DNS query.
+                # The only way to actually block Tor is to block the
+                # CONNECTION to the Tor network itself. ET Open already
+                # ships ~883 "ET TOR Known Tor Exit/Relay Node" signatures
+                # matching a maintained list of real Tor node IPs -
+                # extracted here and converted to drop, same "small
+                # curated high-confidence subset" treatment as
+                # agb-black-drop.rules, NOT the full 50K ruleset. Removed
+                # from suricata.rules afterward so the same SID doesn't
+                # load twice (once as alert, once as drop) across two rule
+                # files, which Suricata would reject.
+                Log "  -BlockTor: extracting ET TOR node-IP signatures and converting to drop..."
+                $allEt = [IO.File]::ReadAllText("$RuleDir\suricata.rules")
+                $etLines = $allEt -split "`r?`n"
+                $torLines = $etLines | Where-Object { $_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
+                if ($torLines.Count -gt 0) {
+                    $torDropText = ($torLines -join "`r`n") -replace '(?m)^alert\s', 'drop '
+                    [IO.File]::WriteAllText("$RuleDir\agb-tor-drop.rules", $torDropText, (New-Object Text.UTF8Encoding($false)))
+                    $keptLines = $etLines | Where-Object { $_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
+                    [IO.File]::WriteAllText("$RuleDir\suricata.rules", ($keptLines -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
+                    Log "  wrote $RuleDir\agb-tor-drop.rules ($($torLines.Count) Tor node-IP signatures converted to drop - blocks Tor network connections, not just .onion)"
+                } else {
+                    Warn "  -BlockTor was passed but no ET TOR signatures were found in the downloaded ruleset - nothing to convert"
+                }
+            }
         } else {
             Warn "  could not download ET Open ruleset - proceeding with agb-black.rules only"
         }
@@ -701,6 +734,19 @@ function Get-EtOpenRuleset([string]`$suricataExe, [string]`$destPath, [string]`$
     [IO.File]::WriteAllText(`$destPath, `$sb.ToString(), (New-Object Text.UTF8Encoding(`$false)))
 }
 Get-EtOpenRuleset -suricataExe '$DeployRoot\suricata.exe' -destPath '$RuleDir\suricata.rules' -workDir '$WorkRoot'
+$(if ($BlockTor) {
+@"
+`$allEt = [IO.File]::ReadAllText('$RuleDir\suricata.rules')
+`$etLines = `$allEt -split "``r?``n"
+`$torLines = `$etLines | Where-Object { `$_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
+if (`$torLines.Count -gt 0) {
+    `$torDropText = (`$torLines -join "``r``n") -replace '(?m)^alert\s', 'drop '
+    [IO.File]::WriteAllText('$RuleDir\agb-tor-drop.rules', `$torDropText, (New-Object Text.UTF8Encoding(`$false)))
+    `$keptLines = `$etLines | Where-Object { `$_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
+    [IO.File]::WriteAllText('$RuleDir\suricata.rules', (`$keptLines -join "``r``n"), (New-Object Text.UTF8Encoding(`$false)))
+}
+"@
+})
 `$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
 if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue }
 "@
@@ -952,6 +998,11 @@ if ($versionLine -and $wdLine -match "yes") {
         Write-Host "suricata.rules (ET Open, alert-only, visibility), and agb-black-drop.rules" -ForegroundColor Green
         Write-Host "(your curated blacklist, action drop - THIS actually blocks) are all in place." -ForegroundColor Green
         Write-Host "All refresh daily via the scheduled tasks (13:00 / 1:30 PM)." -ForegroundColor Green
+        if (Test-Path "$RuleDir\agb-tor-drop.rules") {
+            Write-Host "agb-tor-drop.rules is also in place (-BlockTor) - blocks connections to known" -ForegroundColor Green
+            Write-Host "Tor relay/exit nodes, not just .onion DNS queries (which real Tor Browser" -ForegroundColor Green
+            Write-Host "traffic never generates in the first place)." -ForegroundColor Green
+        }
         Write-Host ""
         Write-Host "  The always-on service was skipped (declined at the prompt, or -SkipService)." -ForegroundColor Yellow
         Write-Host "  NEXT STEP - test manually instead (Administrator, interactive - installs a" -ForegroundColor Yellow

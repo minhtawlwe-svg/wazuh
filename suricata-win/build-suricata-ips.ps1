@@ -44,7 +44,7 @@ param(
     [switch]$SkipScheduledTask,                            # skip Step 12 - no daily rule refresh
     [switch]$SkipWazuhWiring,                              # skip Step 13 - don't touch the Wazuh agent's ossec.conf
     [switch]$SkipService,                                  # skip Step 14 - by default this build registers as an always-on service (see the warning it prints; still requires a typed YES unless -NoPrompt)
-    [string]$WinDivertFilter      = "outbound",            # filter used by the Step 14 service
+    [string]$WinDivertFilter      = "true",                # WinDivert filter for the Step 14 service. "true" = capture BOTH directions of all traffic, which is REQUIRED for HTTP/TLS content inspection: Suricata must see the inbound response side of a TCP flow to reassemble the stream and run app-layer (HTTP/TLS) parsing. The old "outbound"-only default silently broke ALL HTTP-content signatures (confirmed live 2026-07-07: zero event_type:http for external sites, so User-Agent/URL/etc. rules never fired) while leaving IP/DNS/ICMP rules working (those match single packets, no reassembly). "true" is heavier (all traffic through userspace) but is the only way inline HTTP detection actually works - pass a scoped filter here (e.g. 'tcp.DstPort==80 or tcp.SrcPort==80') to trade coverage for lower overhead.
     [switch]$SkipTorBlock                                  # by default, ET TOR node-IP signatures are converted to drop (blocks Tor network access, not just .onion) - pass this to keep them alert-only instead
 )
 
@@ -1073,13 +1073,13 @@ if ($versionLine -and $wdLine -match "yes") {
         Write-Host "  NEXT STEP - test manually instead (Administrator, interactive - installs a" -ForegroundColor Yellow
         Write-Host "  kernel driver on first use, so run this yourself, not unattended):" -ForegroundColor Yellow
         Write-Host "    cd '$DeployRoot'" -ForegroundColor Yellow
-        Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"outbound`"" -ForegroundColor Yellow
+        Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"true`"" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "  'outbound' scopes to all outbound traffic rather than one specific test IP -" -ForegroundColor Yellow
-        Write-Host "  this is safe because only agb-black-drop.rules' small, curated signature set" -ForegroundColor Yellow
-        Write-Host "  can ever trigger an actual drop (the full ET Open ruleset stays alert-only)." -ForegroundColor Yellow
-        Write-Host "  A narrower single-IP filter was live-fire verified 2026-07-05 (genuine block +" -ForegroundColor Yellow
-        Write-Host "  correct eve.json logging) - if you want that safer starting point instead:" -ForegroundColor Yellow
+        Write-Host "  'true' captures BOTH directions of all traffic - REQUIRED for HTTP/TLS content" -ForegroundColor Yellow
+        Write-Host "  inspection to work (Suricata needs the inbound response side to reassemble the" -ForegroundColor Yellow
+        Write-Host "  TCP stream). The old 'outbound'-only filter silently broke every HTTP-content" -ForegroundColor Yellow
+        Write-Host "  signature. Only agb-black-drop.rules' small curated set can ever DROP (ET Open" -ForegroundColor Yellow
+        Write-Host "  stays alert-only), so this is safe. For a narrower single-IP block test instead:" -ForegroundColor Yellow
         Write-Host "    .\suricata.exe -c suricata.yaml --windivert `"ip.DstAddr == 152.42.235.124`"" -ForegroundColor Yellow
         Write-Host "  It's still real inline blocking on real traffic either way - test on a" -ForegroundColor Red
         Write-Host "  disposable machine before ever considering this for a production agent." -ForegroundColor Red

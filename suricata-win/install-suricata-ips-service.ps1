@@ -28,7 +28,7 @@
 [CmdletBinding()]
 param(
     [string]$DeployRoot   = "C:\SuricataIPS",
-    [string]$WinDivertFilter = "outbound",   # same default the build script now suggests
+    [string]$WinDivertFilter = "true",   # both directions - REQUIRED for HTTP/TLS content inspection (outbound-only silently breaks all HTTP-content rules); matches build-suricata-ips.ps1's default
     [string]$ServiceName  = "SuricataIPS",
     [switch]$Remove,                          # uninstall the service instead of installing it
     [switch]$Force                            # skip the interactive confirmation prompt

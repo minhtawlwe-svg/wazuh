@@ -594,6 +594,23 @@ if (-not $SkipRulesSetup) {
         } else {
             Warn "  ja3-fingerprints key not found (commented or not) in stock suricata.yaml - JA3 rules in agb-heuristics.rules may not match anything until this is enabled manually"
         }
+        # GOTCHA FIXED (severe - broke all new outbound connections): the
+        # stock yaml's stream.checksum-validation defaults to "yes" ("reject
+        # incorrect csums"), which is correct for passive/IDS capture (a
+        # tap/mirror sees packets AFTER the NIC has already computed the
+        # real checksum) but wrong for WinDivert inline interception, which
+        # catches packets BEFORE NIC hardware checksum offload fills in the
+        # real value - Suricata sees the placeholder as "invalid" and drops
+        # it. Confirmed live: nearly every packet (49 of 50 in one stats
+        # interval) showed tcp.invalid_checksum, and new connections timed
+        # out consistently. This had been silently masked for a long time by
+        # a background VPN client's own kernel driver seemingly handling
+        # some traffic differently - only surfaced as a full internet outage
+        # once that VPN was uninstalled and real traffic hit WinDivert
+        # directly. Force it off so every matching packet is judged on
+        # content, not a checksum that was never going to be real at this
+        # interception point.
+        $y = Set-YamlKeyIps $y 'checksum-validation' 'no'
         # rule-files -> agb-white.rules (pass) + ET Open (alert) + agb-black-drop (drop)
         # GOTCHA FIXED: agb-white.rules (the pass-rule whitelist that
         # suppresses known-good noise like *.agb.mywire.org DYN_DNS alerts)

@@ -361,11 +361,28 @@ $results += [pscustomobject]@{ Test = "Lateral movement (RDP/WinRM)"; Status = "
 
 # ============================================================================
 # 10. Reconnaissance / ICMP (manager 100600/100601)
+#     GOTCHA FIXED: a plain `ping.exe` never matched anything - checked ET
+#     Open directly and found every "PING"-named signature (GPL ICMP PING
+#     *NIX/BSDtype/Cisco/etc.) is $EXTERNAL_NET -> $HOME_NET (someone pinging
+#     INTO this host to fingerprint its OS), not the reverse - same inbound-
+#     only limitation as the port-scan signatures below. However, real
+#     OUTBOUND ICMP signatures DO exist (malware/backdoor ICMP check-ins) and
+#     manager rule 100600 matches "ICMP" broadly, not just "PING" - found a
+#     live one requiring an exact 9-byte payload ("Echo This") that
+#     System.Net.NetworkInformation.Ping can send without needing raw
+#     sockets/admin. Confirmed live: fires BOTH 100600 (ICMP) and 100861
+#     (its category is "Malware Command and Control Activity Detected") from
+#     one ping. 100601 (bare "PING" in the signature) is NOT covered by this
+#     specific payload - left as an open gap, same inbound-only issue as 100602-607.
 # ============================================================================
-Run-Test -Name "ICMP ping (reconnaissance)" -ManagerRule "100600 / 100601" `
-    -SignaturePattern 'ICMP|PING' `
-    -Note "ET Open's generic ICMP/PING signatures - may be noisy/already-suppressed depending on agb-white.rules" `
-    -Action { & ping.exe -n 2 8.8.8.8 | Out-Null }
+Run-Test -Name "ICMP with malware check-in payload" -ManagerRule "100600 / 100861" `
+    -SignaturePattern 'ICMP' `
+    -Note "Real ET MALWARE outbound ICMP check-in signature (sid:2009130) - also triggers 100861 (C2 category)" `
+    -Action {
+        $payload = [Text.Encoding]::ASCII.GetBytes("Echo This")
+        $ping = New-Object System.Net.NetworkInformation.Ping
+        $ping.Send("8.8.8.8", 2000, $payload) | Out-Null
+    }
 
 # ============================================================================
 # 11. Port scan signatures (100602-100607) - ET SCAN "Suspicious inbound to

@@ -385,6 +385,26 @@ Run-Test -Name "ICMP with malware check-in payload" -ManagerRule "100600 / 10086
     }
 
 # ============================================================================
+# 10b. Network Trojan (category "A Network Trojan was detected") -> manager 100860
+#      Rule 100860 became the SOLE rule for this category after the old
+#      100335/100641 duplicates were removed - previously untested. Uses the
+#      same craftable-ICMP-payload technique as the check-in test above, but
+#      with the "ET MALWARE Gimmiv Infection Ping Outbound" signature (a
+#      trojan-activity classtype -> category "A Network Trojan was detected").
+#      Needs a 20-byte ICMP payload containing the literal 19-byte string
+#      "abcde12345fghij6789". Confirmed live: fires 100860 (and NOT 100861 -
+#      different category). No actual malware runs, just the matching bytes.
+# ============================================================================
+Run-Test -Name "Network Trojan ICMP payload" -ManagerRule "100860" `
+    -SignaturePattern 'Gimmiv|Network Trojan' `
+    -Note "Real ET MALWARE Gimmiv outbound ICMP signature (trojan-activity classtype) - no malware runs, just the matching payload bytes" `
+    -Action {
+        $payload = [Text.Encoding]::ASCII.GetBytes("abcde12345fghij67890")  # 20 bytes, contains the 19-byte Gimmiv content
+        $ping = New-Object System.Net.NetworkInformation.Ping
+        $ping.Send("8.8.8.8", 2000, $payload) | Out-Null
+    }
+
+# ============================================================================
 # 11. Port scan signatures (100602-100607) - ET SCAN "Suspicious inbound to
 #     <port>" signatures are $EXTERNAL_NET -> $HOME_NET (someone scanning
 #     INTO this host) - a single machine can't generate genuine inbound scan
@@ -546,7 +566,7 @@ if ($spamhausIp) {
 # ============================================================================
 Write-Host "`n=== Categories with no safe test payload ===" -ForegroundColor Cyan
 $noSafeTest = @(
-    @{ Name = "Malware/Trojan Activity";        Rule = "100640-100641" }
+    @{ Name = "Trojan Activity (100640)";        Rule = "100640" }
     @{ Name = "Exploit Kit activity";            Rule = "100721" }
     @{ Name = "Noise suppression (by design)";   Rule = "100760-100764" }
     @{ Name = "Information Leak";                Rule = "100680" }
@@ -558,8 +578,9 @@ foreach ($t in $noSafeTest) {
 }
 Write-Host "  (100760-100764 are SUPPRESSION rules by design - the goal there is confirming" -ForegroundColor DarkGray
 Write-Host "   they DON'T escalate, not triggering an alert; not meaningfully testable in this format)" -ForegroundColor DarkGray
-Write-Host "  (100640-100641/100860-100861 share categories with rules already tested above -" -ForegroundColor DarkGray
-Write-Host "   no distinct safe payload exists specifically for these classifications)" -ForegroundColor DarkGray
+Write-Host "  (100640 matches category 'Trojan Activity' - NOTE this is not a standard Suricata" -ForegroundColor DarkGray
+Write-Host "   classification string, so it may never fire; the real trojan detector is 100860," -ForegroundColor DarkGray
+Write-Host "   category 'A Network Trojan was detected', which IS tested above via the Gimmiv payload)" -ForegroundColor DarkGray
 
 # ============================================================================
 # c2_confirmed (manager 100850) - not a separate test. Fires when 2+

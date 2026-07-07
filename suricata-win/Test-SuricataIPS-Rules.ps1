@@ -271,6 +271,52 @@ if ($IncludeSlow) {
 }
 
 # ============================================================================
+# 7b. Cryptomining - Stratum/getblocktemplate protocol pattern -> manager 100700
+#     Sends a harmless raw TCP payload matching a REAL ET COINMINER
+#     signature's content pattern (sid:2017878, getblocktemplate JSON-RPC
+#     request, $HOME_NET -> $EXTERNAL_NET direction) - no actual mining
+#     happens, just the matching bytes on the wire.
+# ============================================================================
+Run-Test -Name "Cryptomining protocol pattern" -ManagerRule "100700" `
+    -SignaturePattern 'COINMINER|Crypto Currency Mining' `
+    -Note "Sends a harmless payload matching a real ET COINMINER getblocktemplate signature - no actual mining occurs" `
+    -Action {
+        try {
+            $tc = New-Object System.Net.Sockets.TcpClient
+            $tc.Connect("1.1.1.1", 80)
+            $stream = $tc.GetStream()
+            $payload = [Text.Encoding]::ASCII.GetBytes('{"id":1,"method": "getblocktemplate"}')
+            $stream.Write($payload, 0, $payload.Length)
+            $stream.Flush()
+            Start-Sleep -Milliseconds 500
+            $tc.Close()
+        } catch {}
+    }
+
+# ============================================================================
+# 7c. PowerShell high-port hunting rule -> manager 100862 (sid:2044771)
+#     Sends the literal bytes "PS C:\" - the real signature's exact content
+#     match - to an external high port. tcpbin.com is a well-known public
+#     TCP echo test service. No shell/command actually runs; this is just
+#     matching text on the wire, same as the signature itself expects.
+# ============================================================================
+Run-Test -Name "PowerShell high-port hunting rule" -ManagerRule "100862" `
+    -SignaturePattern 'PowerShell Command Prompt Outbound On High Port' `
+    -Note "tcpbin.com is a public TCP echo test service on a high port - if unreachable, this test can't complete" `
+    -Action {
+        try {
+            $tc = New-Object System.Net.Sockets.TcpClient
+            $tc.Connect("tcpbin.com", 4242)
+            $stream = $tc.GetStream()
+            $payload = [byte[]](0x50,0x53,0x20,0x43,0x3a,0x5c)  # literal "PS C:\"
+            $stream.Write($payload, 0, $payload.Length)
+            $stream.Flush()
+            Start-Sleep -Milliseconds 500
+            $tc.Close()
+        } catch {}
+    }
+
+# ============================================================================
 # 8. JA3 fingerprint heuristic (sid:1000210/1000211) -> manager 101031
 #    Cannot be safely/easily generated without a tool that spoofs a specific
 #    malware family's TLS ClientHello - documented as untestable here.
@@ -412,6 +458,42 @@ Write-Host "  -> confirm on Wazuh dashboard: rule 101043 (needs 20+ distinct hos
 $results += [pscustomobject]@{ Test = "SMB lateral movement scan"; Status = "MANUAL"; ManagerRule = "101043" }
 
 # ============================================================================
+# 17b. Spamhaus DROP-list beacon -> manager 100740 (base), 100742 (escalation,
+#      6+ hits to the same dest_ip within 180s). NOT a synthetic target -
+#      pulls a REAL, currently-listed network from Spamhaus's public DROP
+#      list (https://www.spamhaus.org/drop/drop.txt) and connects to it.
+#      User-approved trade-off: unlike testmynids.org/badssl.com, there is
+#      no purpose-built safe test target for this specific list, so this
+#      genuinely contacts a real, currently-blacklisted network range.
+#      NOTE: rule 100740's description says "verdict from 100921/100922" -
+#      if those upstream rules aren't present/active on the manager, this
+#      may not escalate as expected; that's a manager-config question, not
+#      something this script can verify. Connection-only (TCP SYN), no
+#      data sent.
+# ============================================================================
+Write-Host "`n=== Spamhaus DROP-list beacon (manager 100740/100742) ===" -ForegroundColor Cyan
+$spamhausIp = $null
+try {
+    $dropList = (Invoke-WebRequest -Uri "https://www.spamhaus.org/drop/drop.txt" -UseBasicParsing -TimeoutSec 10).Content
+    $firstNet = ($dropList -split "`n" | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+/\d+' } | Select-Object -First 1)
+    if ($firstNet -match '^(\d+\.\d+\.\d+)\.\d+/') { $spamhausIp = "$($Matches[1]).1" }
+} catch { Warn "could not fetch the Spamhaus DROP list: $($_.Exception.Message)" }
+
+if ($spamhausIp) {
+    Log "using $spamhausIp from the current Spamhaus DROP list - generating 6 rapid connections to cross the escalation threshold..."
+    for ($i = 1; $i -le 6; $i++) {
+        Test-NetConnection $spamhausIp -Port 443 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
+    }
+    Write-Host "  fired - manager-side rule, check eve.json/dashboard for whether Suricata's own" -ForegroundColor DarkGray
+    Write-Host "  Spamhaus-intel matching (rules 100921/100922, not visible to this script) engaged" -ForegroundColor DarkGray
+    Write-Host "  -> confirm on Wazuh dashboard: rule 100740 (base) / 100742 (6+ hits within 180s)" -ForegroundColor DarkYellow
+    $results += [pscustomobject]@{ Test = "Spamhaus DROP-list beacon"; Status = "MANUAL"; ManagerRule = "100740/100742" }
+} else {
+    Log "skipping Spamhaus test - could not retrieve a current DROP-list entry"
+    $results += [pscustomobject]@{ Test = "Spamhaus DROP-list beacon"; Status = "SKIPPED"; ManagerRule = "100740-100742" }
+}
+
+# ============================================================================
 # 18. Categories with no safe/reliable test payload
 #     These all require either a real malware/exploit sample, a genuine
 #     external attacker, or connecting to a real live-malicious IP we don't
@@ -421,9 +503,7 @@ $results += [pscustomobject]@{ Test = "SMB lateral movement scan"; Status = "MAN
 Write-Host "`n=== Categories with no safe test payload ===" -ForegroundColor Cyan
 $noSafeTest = @(
     @{ Name = "Malware/Trojan Activity";        Rule = "100640-100641" }
-    @{ Name = "Cryptomining activity";           Rule = "100700" }
     @{ Name = "Exploit Kit activity";            Rule = "100721" }
-    @{ Name = "Spamhaus DROP-list beacon";       Rule = "100740-100742" }
     @{ Name = "Noise suppression (by design)";   Rule = "100760-100764" }
     @{ Name = "Information Leak";                Rule = "100680" }
     @{ Name = "Privilege Gain";                  Rule = "100780-100782" }
@@ -434,6 +514,23 @@ foreach ($t in $noSafeTest) {
 }
 Write-Host "  (100760-100764 are SUPPRESSION rules by design - the goal there is confirming" -ForegroundColor DarkGray
 Write-Host "   they DON'T escalate, not triggering an alert; not meaningfully testable in this format)" -ForegroundColor DarkGray
+Write-Host "  (100640-100641/100860-100861 share categories with rules already tested above -" -ForegroundColor DarkGray
+Write-Host "   no distinct safe payload exists specifically for these classifications)" -ForegroundColor DarkGray
+
+# ============================================================================
+# c2_confirmed (manager 100850) - not a separate test. Fires when 2+
+# c2_correlate-tagged rules hit the SAME agent within 5 minutes. This run
+# already fired several (100802 IP blacklist, 101000 DGA, 101060 Tor, plus
+# Sysmon-based 100820/100821/100840 if those completed) well within that
+# window, so 100850 SHOULD already be showing on the dashboard as a side
+# effect of the tests above - nothing more to do here except check for it.
+# ============================================================================
+Write-Host "`n=== c2_confirmed correlation (manager 100850) ===" -ForegroundColor Cyan
+Write-Host "  not a separate test - fires when 2+ c2_correlate-tagged rules (100802, 101000," -ForegroundColor DarkGray
+Write-Host "  101060, 100820, 100821, 100840) hit this agent within 5 min. This run already" -ForegroundColor DarkGray
+Write-Host "  fired several of those, so 100850 should already be on the dashboard too." -ForegroundColor DarkGray
+Write-Host "  -> confirm on Wazuh dashboard: rule 100850" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "c2_confirmed correlation"; Status = "MANUAL"; ManagerRule = "100850" }
 
 # ============================================================================
 # Summary

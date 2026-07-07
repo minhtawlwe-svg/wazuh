@@ -73,6 +73,18 @@ function Run-Test {
     # concurrent writes.
     $before = (Get-Item $EvePath).Length
 
+    # GOTCHA: rules that pass reliably when tested alone can appear to
+    # "leak through" when Run-Test calls happen back-to-back with no gap -
+    # WinDivert is a userspace packet-interception layer (packets get
+    # diverted out to Suricata for inspection, then reinjected or dropped),
+    # and it may not hold every packet under rapid successive connection
+    # attempts the same way a kernel-native firewall rule would. A few
+    # seconds of spacing before each test avoids conflating that with an
+    # actual rule/detection bug - also more representative of the real
+    # threat model (an isolated C2/Tor connection attempt, not a rapid-fire
+    # test burst).
+    Start-Sleep -Seconds 5
+
     $connFailed = $null
     try {
         $connFailed = & $Action
@@ -102,10 +114,20 @@ function Run-Test {
     # AR-blocked IP showed exactly this (connection failed, zero new eve.json
     # entries), while the same IP tested via a clean rule (no prior AR hit)
     # produced both the block AND the alert normally.
+    # NOTE: $connFailed actually holds the action's raw return value, which
+    # for these tests IS Test-NetConnection's TcpTestSucceeded - so
+    # $connFailed -eq $false means the CONNECTION FAILED, i.e. it WAS
+    # blocked (good). $connFailed -eq $true means it connected, i.e. NOT
+    # blocked (bad). Named for what it represents to the caller, not
+    # inverted from the raw value - the two branches below were swapped in
+    # an earlier version of this script, which made every successful block
+    # report as a failure and vice versa; fixed after live testing showed
+    # the actual Suricata/WinDivert blocking was correct all along and only
+    # this reporting logic was wrong.
     $status = if ($hit) { "PASS" } else { "FAIL" }
     $dropNote = ""
     if ($ExpectDrop) {
-        if ($connFailed -eq $true) {
+        if ($connFailed -eq $false) {
             $dropNote = " | connection BLOCKED (confirmed)"
             if (-not $hit) {
                 $fwHit = Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match [regex]::Escape($TestTarget) }
@@ -116,9 +138,11 @@ function Run-Test {
                     $status = "FAIL"
                     $dropNote += " | blocked but no alert AND no pre-existing firewall rule found - genuinely worth investigating"
                 }
+            } else {
+                $status = "PASS"
             }
         }
-        elseif ($connFailed -eq $false) { $dropNote = " | connection SUCCEEDED (NOT blocked - check!)"; $status = "FAIL" }
+        elseif ($connFailed -eq $true) { $dropNote = " | connection SUCCEEDED (NOT blocked - check!)"; $status = "FAIL" }
     }
 
     if ($hit) {

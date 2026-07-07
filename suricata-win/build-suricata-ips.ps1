@@ -680,10 +680,26 @@ if (-not $SkipRulesSetup) {
                     # direction. Swap source/dest so it reads
                     # "$HOME_NET any -> [TorIPs] any" instead.
                     $torDropText = ($torLines -join "`r`n") -replace '(?m)^alert tcp (\[[^\]]+\]) any -> \$HOME_NET any', 'drop tcp $HOME_NET any -> $1 any'
+                    # GOTCHA FIXED: the stock signature carries a
+                    # "threshold: type limit, track by_src, seconds 60,
+                    # count 1;" clause - meant to cap ALERT volume when this
+                    # was alert-only, but it ALSO limits how often the DROP
+                    # action fires. Confirmed live: the first SYN packet to
+                    # a Tor IP got dropped (logged action:"blocked"), but
+                    # Windows' own automatic TCP retransmission of that same
+                    # SYN a moment later was NOT re-inspected/re-dropped
+                    # (threshold already consumed for that source), reached
+                    # the real Tor node, got a SYN-ACK, and the connection
+                    # "succeeded" overall despite the alert firing correctly.
+                    # Strip the threshold entirely so every matching packet
+                    # is dropped, not just the first one per source per
+                    # minute - the whole point of converting this to a
+                    # blocking rule instead of leaving it alert-only.
+                    $torDropText = $torDropText -replace 'threshold:\s*type limit,\s*track by_src,\s*seconds \d+,\s*count \d+;\s*', ''
                     [IO.File]::WriteAllText("$RuleDir\agb-tor-drop.rules", $torDropText, (New-Object Text.UTF8Encoding($false)))
                     $keptLines = $etLines | Where-Object { $_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
                     [IO.File]::WriteAllText("$RuleDir\suricata.rules", ($keptLines -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
-                    Log "  wrote $RuleDir\agb-tor-drop.rules ($($torLines.Count) Tor node-IP signatures converted to drop, direction reversed to match outbound - blocks Tor network connections, not just .onion)"
+                    Log "  wrote $RuleDir\agb-tor-drop.rules ($($torLines.Count) Tor node-IP signatures converted to drop, direction reversed + rate-limit threshold stripped - blocks every matching connection attempt, not just .onion)"
                 } else {
                     Warn "  no ET TOR signatures were found in the downloaded ruleset - nothing to convert"
                 }
@@ -758,6 +774,7 @@ $(if (-not $SkipTorBlock) {
 `$torLines = `$etLines | Where-Object { `$_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
 if (`$torLines.Count -gt 0) {
     `$torDropText = (`$torLines -join "``r``n") -replace '(?m)^alert tcp (\[[^\]]+\]) any -> \`$HOME_NET any', 'drop tcp `$HOME_NET any -> `$1 any'
+    `$torDropText = `$torDropText -replace 'threshold:\s*type limit,\s*track by_src,\s*seconds \d+,\s*count \d+;\s*', ''
     [IO.File]::WriteAllText('$RuleDir\agb-tor-drop.rules', `$torDropText, (New-Object Text.UTF8Encoding(`$false)))
     `$keptLines = `$etLines | Where-Object { `$_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
     [IO.File]::WriteAllText('$RuleDir\suricata.rules', (`$keptLines -join "``r``n"), (New-Object Text.UTF8Encoding(`$false)))

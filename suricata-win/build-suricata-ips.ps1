@@ -611,6 +611,20 @@ if (-not $SkipRulesSetup) {
         # content, not a checksum that was never going to be real at this
         # interception point.
         $y = Set-YamlKeyIps $y 'checksum-validation' 'no'
+        # GOTCHA FIXED (same investigation as above): stock yaml's
+        # exception-policy defaults to "auto", which its own doc comment
+        # says resolves to drop-flow in IPS mode - any stream anomaly (e.g.
+        # a flow misclassified as a "midstream" pickup) then drops the
+        # WHOLE flow rather than just logging it, compounding the
+        # checksum-validation problem above. Fixed to "ignore" - confirmed
+        # live this was still causing timeouts even after the checksum fix
+        # alone. NOTE: cannot use Set-YamlKeyIps here - "exception-policy:"
+        # also appears as a bare, indented sub-key under the stats config
+        # earlier in the file (empty value, unrelated section), and
+        # Set-YamlKeyIps's (\s*) prefix would match that FIRST occurrence
+        # instead of the real top-level setting. Match only the true
+        # zero-indent top-level line instead.
+        $y = [regex]::Replace($y, '(?m)^exception-policy:.*$', 'exception-policy: ignore', 1)
         # rule-files -> agb-white.rules (pass) + ET Open (alert) + agb-black-drop (drop)
         # GOTCHA FIXED: agb-white.rules (the pass-rule whitelist that
         # suppresses known-good noise like *.agb.mywire.org DYN_DNS alerts)

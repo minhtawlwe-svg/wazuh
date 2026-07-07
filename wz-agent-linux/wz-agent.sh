@@ -2,7 +2,15 @@
 
 set -euo pipefail
 
-WAZUH_MANAGER="<MANAGER_IP>"
+# SECURITY: no hardcoded default - this repo is public, so the internal
+# manager IP must come from arg 1 or the WAZUH_MANAGER env var:
+#   sudo ./wz-agent.sh <manager-ip>      OR
+#   sudo WAZUH_MANAGER=<manager-ip> ./wz-agent.sh
+WAZUH_MANAGER="${1:-${WAZUH_MANAGER:-}}"
+if [ -z "$WAZUH_MANAGER" ]; then
+    echo "[ERROR] Manager IP/hostname required: ./wz-agent.sh <manager-ip>  (or set WAZUH_MANAGER env var)"
+    exit 1
+fi
 
 clear
 

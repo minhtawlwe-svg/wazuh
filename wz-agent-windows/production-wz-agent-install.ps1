@@ -4,7 +4,10 @@ Author: SOC Automation
 #>
 
 param(
-    [string]$WazuhManager = "<MANAGER_IP>",
+    # SECURITY: no default - this repo is public, so the internal manager IP
+    # must be passed at run time: -WazuhManager <ip-or-hostname>
+    [Parameter(Mandatory = $true)]
+    [string]$WazuhManager,
     [string]$WazuhVersionUrl = "https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.5-1.msi",
     [switch]$ForceReinstall,
     [string]$LogFile = "$env:TEMP\wazuh-install.log"

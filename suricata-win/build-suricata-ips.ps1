@@ -17,6 +17,19 @@
 # full narrative writeup (every error hit and why), or the "GOTCHA FIXED"
 # comment blocks below for the condensed version.
 #
+# CHANGELOG 2026-07-07 (hardening review):
+#   - NEW -RepoRef param: pin ALL repo downloads (rules + AR scripts) to a
+#     commit SHA instead of the git-home branch (supply-chain protection)
+#   - the two daily refresh tasks merged into ONE validated task: staged
+#     download, per-file syntax whitelist, suricata -T check, auto-rollback,
+#     single service restart (was: blind overwrite + 2 restarts/day)
+#   - suricata -T config gate before the always-on service is installed
+#   - WinSW wrapper fallback if the sc.exe-registered service hits the
+#     classic console-app 1053 startup failure
+#   - ET TOR direction-reversal regex now reports lines it could NOT
+#     convert (ET format drift detection)
+#   - SHA256 of deployed Active Response scripts logged for audit
+#
 # Requirements: Administrator PowerShell, ~5 GB free disk, internet access.
 # Takes 20-60+ minutes depending on connection/CPU (largest cost: compiling
 # ~250 Rust crates for Suricata's rust/ subsystem, plus the C source tree).
@@ -31,6 +44,7 @@
 [CmdletBinding()]
 param(
     [string]$SuricataVersion      = "suricata-8.0.3",     # git tag to build
+    [string]$RepoRef              = "git-home",            # branch OR full commit SHA for ALL raw.githubusercontent downloads (agb rules + AR scripts). SECURITY: pass a pinned 40-char commit SHA here - a branch ref means anyone who ever compromises the repo can push new rule/AR content that every deployed machine pulls daily as SYSTEM. A pinned SHA freezes what gets pulled until you deliberately bump it.
     [string]$WorkRoot             = "C:\msys64\suricata-ips-build",
     [string]$DeployRoot           = "C:\SuricataIPS",       # final self-contained output
     [string]$NpcapUrl             = "https://npcap.com/dist/npcap-1.82.exe",
@@ -64,6 +78,8 @@ $ErrorActionPreference = "Stop"
 # the actual PATH/environment bug was found. Set it here, before ANY bash
 # call happens.
 $env:MSYSTEM = "UCRT64"
+# single source of truth for every download out of this repo - see -RepoRef above
+$RepoRawBase = "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/$RepoRef/suricata-win"
 function Log($m)  { Write-Host "[ips-build] $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "[ips-build] WARN: $m" -ForegroundColor Yellow }
 function Die($m)  {
@@ -523,7 +539,7 @@ function Get-EtOpenRuleset([string]$suricataExe, [string]$destPath, [string]$wor
 function Get-AgbBlackDropRuleset([string]$destPath) {
     $tmpPath = "$env:TEMP\agb-black-source.rules"
     try {
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-black.rules" -OutFile $tmpPath -UseBasicParsing
+        Invoke-WebRequest -Uri "$RepoRawBase/agb-black.rules" -OutFile $tmpPath -UseBasicParsing
     } catch { return $false }
     $text = [IO.File]::ReadAllText($tmpPath)
     $dropText = [regex]::Replace($text, '(?m)^alert\s', 'drop ')
@@ -660,7 +676,7 @@ if (-not $SkipRulesSetup) {
 
         Log "  downloading agb-white.rules (pass rules, unmodified)..."
         try {
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-white.rules" -OutFile "$RuleDir\agb-white.rules" -UseBasicParsing
+            Invoke-WebRequest -Uri "$RepoRawBase/agb-white.rules" -OutFile "$RuleDir\agb-white.rules" -UseBasicParsing
             $passCount = ([regex]::Matches([IO.File]::ReadAllText("$RuleDir\agb-white.rules"), '(?m)^\s*pass\s')).Count
             Log "  wrote $RuleDir\agb-white.rules ($passCount pass signatures)"
         } catch {
@@ -727,6 +743,13 @@ if (-not $SkipRulesSetup) {
                     # minute - the whole point of converting this to a
                     # blocking rule instead of leaving it alert-only.
                     $torDropText = $torDropText -replace 'threshold:\s*type limit,\s*track by_src,\s*seconds \d+,\s*count \d+;\s*', ''
+                    # GOTCHA GUARD: the direction-reversal regex above only matches the
+                    # exact "alert tcp [...] any -> $HOME_NET any" header shape ET uses
+                    # today. If ET ever changes that format, non-matching lines silently
+                    # stay alert-only inside this drop file - surface the count so the
+                    # drift is visible instead of invisible.
+                    $torStillAlert = ([regex]::Matches($torDropText, '(?m)^alert\s')).Count
+                    if ($torStillAlert -gt 0) { Warn "  $torStillAlert ET TOR signature(s) did not match the expected header format and remain ALERT-only inside agb-tor-drop.rules - ET format may have drifted, review the file" }
                     [IO.File]::WriteAllText("$RuleDir\agb-tor-drop.rules", $torDropText, (New-Object Text.UTF8Encoding($false)))
                     $keptLines = $etLines | Where-Object { $_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
                     [IO.File]::WriteAllText("$RuleDir\suricata.rules", ($keptLines -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
@@ -750,7 +773,7 @@ if (-not $SkipRulesSetup) {
 
         Log "  downloading agb-heuristics.rules (DGA/exfil/JA3 heuristics, alert-only)..."
         try {
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-heuristics.rules" -OutFile "$RuleDir\agb-heuristics.rules" -UseBasicParsing
+            Invoke-WebRequest -Uri "$RepoRawBase/agb-heuristics.rules" -OutFile "$RuleDir\agb-heuristics.rules" -UseBasicParsing
             Log "  wrote $RuleDir\agb-heuristics.rules"
         } catch {
             Warn "  could not download agb-heuristics.rules ($($_.Exception.Message))"
@@ -760,98 +783,179 @@ if (-not $SkipRulesSetup) {
     Log "  skipped (-SkipRulesSetup) - deploy folder has only the binary, no yaml/rules"
 }
 
-# ---------- Step 11: daily scheduled tasks (keep ET Open + agb-black.rules current) ----------
-Log "Step 12/15: daily rule refresh scheduled tasks"
+# ---------- Step 11: daily validated rule refresh (single task) ----------
+Log "Step 12/15: daily rule refresh scheduled task (staged + validated + single restart)"
+# GOTCHA FIXED (x3, all found in review):
+#   1. The old refresh tasks downloaded rules and IMMEDIATELY restarted the
+#      service - a truncated download or an ET rule this build rejects would
+#      restart the service into a failed state at 13:00 with nobody watching.
+#      Now: everything downloads into a STAGING dir, every file is
+#      syntax-checked (only comments/blank/pass/alert/drop/reject lines
+#      allowed - kills truncated files, HTML error pages, and injected
+#      content), the swap happens atomically with a backup, the FULL config
+#      is validated with `suricata.exe -T`, and on failure the old rules are
+#      rolled back and the service is left alone.
+#   2. Two separate tasks (13:00 + 1:30 PM) each restarted the service -
+#      every restart is a brief fail-open blocking gap. Merged into ONE task
+#      with ONE restart.
+#   3. The agb-* downloads pulled from a branch ref as SYSTEM daily - a
+#      repo compromise = arbitrary rule injection on every deployed machine.
+#      The syntax whitelist limits blast radius to rule content only (no
+#      code execution), and -RepoRef lets you pin a commit SHA to freeze it
+#      completely.
 if (-not $SkipScheduledTask -and (Test-Path "$DeployRoot\suricata.yaml")) {
-    # GOTCHA: Step 14 (below) registers this build as an always-on service
-    # by default - if these tasks only refreshed the rule FILES on disk
-    # without also restarting that service, a continuously-running
-    # instance would keep enforcing stale rules forever, silently
-    # defeating the whole point of a daily refresh. Both task scripts
-    # below check for and restart the 'SuricataIPS' service (only if it's
-    # actually running - harmless no-op if the service was skipped or
-    # isn't installed on this machine).
     $IpsScriptsDir = "$WorkRoot\ips-scripts"
     New-Item -ItemType Directory -Force -Path $IpsScriptsDir | Out-Null
+    $refreshScript = "$IpsScriptsDir\refresh-suricata-ips-rules.ps1"
 
-    # --- Task A: ET Open ruleset refresh, 13:00 daily (matches the IDS
-    # deployment's "Suricata Daily Update And Log Rotation" timing) ---
-    $etTaskScript = "$IpsScriptsDir\refresh-et-open.ps1"
-    $etBody = @"
-`$ErrorActionPreference = 'Continue'
-function Get-EtOpenRuleset([string]`$suricataExe, [string]`$destPath, [string]`$workDir) {
-    `$ver = (& `$suricataExe -V 2>&1 | Select-String -Pattern '(\d+\.\d+\.\d+)' | Select-Object -First 1).Matches.Groups[1].Value
-    `$mm = `$ver.Substring(0, `$ver.LastIndexOf('.'))
-    `$tarPath = "`$workDir\emerging.rules.tar.gz"
-    `$urls = @("https://rules.emergingthreats.net/open/suricata-`$ver/emerging.rules.tar.gz","https://rules.emergingthreats.net/open/suricata-`$mm.0/emerging.rules.tar.gz","https://rules.emergingthreats.net/open/suricata-`$mm/emerging.rules.tar.gz")
-    `$got = `$false
-    foreach (`$u in `$urls) { try { Invoke-WebRequest -Uri `$u -OutFile `$tarPath -UseBasicParsing; `$got = `$true; break } catch {} }
-    if (-not `$got) { return }
-    `$extractDir = "`$workDir\rules-extract"
-    if (Test-Path `$extractDir) { Remove-Item `$extractDir -Recurse -Force }
-    New-Item -ItemType Directory -Force -Path `$extractDir | Out-Null
-    & tar.exe -xzf `$tarPath -C `$extractDir
-    `$rfiles = Get-ChildItem (Join-Path `$extractDir 'rules') -Filter *.rules -ErrorAction SilentlyContinue
-    if (-not `$rfiles) { `$rfiles = Get-ChildItem `$extractDir -Recurse -Filter *.rules }
-    `$sb = New-Object Text.StringBuilder
-    foreach (`$f in `$rfiles) { [void]`$sb.AppendLine([IO.File]::ReadAllText(`$f.FullName)) }
-    [IO.File]::WriteAllText(`$destPath, `$sb.ToString(), (New-Object Text.UTF8Encoding(`$false)))
-}
-Get-EtOpenRuleset -suricataExe '$DeployRoot\suricata.exe' -destPath '$RuleDir\suricata.rules' -workDir '$WorkRoot'
-$(if (-not $SkipTorBlock) {
-@"
-`$allEt = [IO.File]::ReadAllText('$RuleDir\suricata.rules')
-`$etLines = `$allEt -split "``r?``n"
-`$torLines = `$etLines | Where-Object { `$_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
-if (`$torLines.Count -gt 0) {
-    `$torDropText = (`$torLines -join "``r``n") -replace '(?m)^alert tcp (\[[^\]]+\]) any -> \`$HOME_NET any', 'drop tcp `$HOME_NET any -> `$1 any'
-    `$torDropText = `$torDropText -replace 'threshold:\s*type limit,\s*track by_src,\s*seconds \d+,\s*count \d+;\s*', ''
-    [IO.File]::WriteAllText('$RuleDir\agb-tor-drop.rules', `$torDropText, (New-Object Text.UTF8Encoding(`$false)))
-    `$keptLines = `$etLines | Where-Object { `$_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
-    [IO.File]::WriteAllText('$RuleDir\suricata.rules', (`$keptLines -join "``r``n"), (New-Object Text.UTF8Encoding(`$false)))
-}
-"@
-})
-`$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
-if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue }
-"@
-    [IO.File]::WriteAllText($etTaskScript, $etBody, (New-Object Text.UTF8Encoding($false)))
-    $etAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$etTaskScript`""
-    $etTrigger   = New-ScheduledTaskTrigger -Daily -At '13:00'
-    $etPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
-    Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-ET-Refresh' -Action $etAction -Trigger $etTrigger -Principal $etPrincipal -Force | Out-Null
-    Log "  scheduled task 'AGB-Suricata-IPS-ET-Refresh' registered - daily 13:00 as SYSTEM"
+    # written as a literal template + token replace, NOT an expandable
+    # here-string - the old nested backtick-escaping approach was where the
+    # previous version's bugs kept hiding.
+    $refreshTemplate = @'
+# refresh-suricata-ips-rules.ps1 - generated by build-suricata-ips.ps1
+# Daily task: stage ET Open + agb rules, syntax-check every file, swap in
+# with backup, validate full config via suricata -T, roll back on failure,
+# restart the SuricataIPS service ONCE (only if it was already running).
+$ErrorActionPreference = 'Continue'
+$DeployRoot = '__DEPLOYROOT__'
+$RuleDir    = '__RULEDIR__'
+$WorkRoot   = '__WORKROOT__'
+$RawBase    = '__RAWBASE__'
+$BlockTor   = __BLOCKTOR__
+$LogFile    = "$WorkRoot\ips-scripts\refresh.log"
+function RLog([string]$m) { "$(Get-Date -Format s) $m" | Add-Content -Path $LogFile }
+if ((Test-Path $LogFile) -and ((Get-Item $LogFile).Length -gt 1MB)) { Remove-Item $LogFile -Force }
 
-    # --- Task B: agb-black.rules (drop-converted) + agb-white.rules refresh,
-    # 1:30 PM daily (matches the IDS deployment's "AGB-Suricata-Rules-Deploy"
-    # timing) ---
-    $agbTaskScript = "$IpsScriptsDir\refresh-agb-black-drop.ps1"
-    $agbBody = @"
-`$ErrorActionPreference = 'Continue'
-`$tmpPath = "`$env:TEMP\agb-black-source.rules"
+# A rules file may contain ONLY blank lines, comments, and
+# pass/alert/drop/reject signatures. Anything else (truncated download,
+# HTML error page, injected content) rejects the WHOLE file - the previous
+# known-good copy stays in place.
+function Test-RulesSane([string]$path, [int]$minRules) {
+    if (-not (Test-Path $path)) { return $false }
+    $count = 0
+    foreach ($l in [IO.File]::ReadLines($path)) {
+        $t = $l.Trim()
+        if ($t -eq '' -or $t.StartsWith('#')) { continue }
+        if ($t -match '^(pass|alert|drop|reject)\s') { $count++; continue }
+        RLog "REJECT $path - unexpected content: $($t.Substring(0, [Math]::Min(120, $t.Length)))"
+        return $false
+    }
+    if ($count -lt $minRules) { RLog "REJECT $path - only $count rules (expected >= $minRules)"; return $false }
+    return $true
+}
+
+$Staging = "$WorkRoot\rules-staging"
+if (Test-Path $Staging) { Remove-Item $Staging -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $Staging | Out-Null
+$updated = @()
+
+# ---- ET Open (with Content-Length verification) ----
 try {
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-black.rules" -OutFile `$tmpPath -UseBasicParsing
-    `$text = [IO.File]::ReadAllText(`$tmpPath)
-    `$dropText = [regex]::Replace(`$text, '(?m)^alert\s', 'drop ')
-    [IO.File]::WriteAllText('$RuleDir\agb-black-drop.rules', `$dropText, (New-Object Text.UTF8Encoding(`$false)))
-} catch {}
+    $ver = (& "$DeployRoot\suricata.exe" -V 2>&1 | Select-String -Pattern '(\d+\.\d+\.\d+)' | Select-Object -First 1).Matches.Groups[1].Value
+    $mm  = $ver.Substring(0, $ver.LastIndexOf('.'))
+    $tarPath = "$Staging\emerging.rules.tar.gz"
+    $got = $false
+    foreach ($u in @("https://rules.emergingthreats.net/open/suricata-$ver/emerging.rules.tar.gz",
+                     "https://rules.emergingthreats.net/open/suricata-$mm.0/emerging.rules.tar.gz",
+                     "https://rules.emergingthreats.net/open/suricata-$mm/emerging.rules.tar.gz")) {
+        try {
+            $expected = (Invoke-WebRequest -Uri $u -Method Head -UseBasicParsing).Headers.'Content-Length' | Select-Object -Last 1
+            Invoke-WebRequest -Uri $u -OutFile $tarPath -UseBasicParsing
+            if ($expected -and ("$((Get-Item $tarPath).Length)" -ne "$expected")) { RLog "SIZE MISMATCH from $u - retrying next mirror"; continue }
+            $got = $true; break
+        } catch { RLog "ET download failed from $u : $($_.Exception.Message)" }
+    }
+    if ($got) {
+        $extractDir = "$Staging\rules-extract"
+        New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+        & tar.exe -xzf $tarPath -C $extractDir
+        $rfiles = Get-ChildItem (Join-Path $extractDir 'rules') -Filter *.rules -ErrorAction SilentlyContinue
+        if (-not $rfiles) { $rfiles = Get-ChildItem $extractDir -Recurse -Filter *.rules }
+        $sb = New-Object Text.StringBuilder
+        foreach ($f in $rfiles) { [void]$sb.AppendLine([IO.File]::ReadAllText($f.FullName)) }
+        [IO.File]::WriteAllText("$Staging\suricata.rules", $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
+
+        if ($BlockTor) {
+            $etLines  = [IO.File]::ReadAllText("$Staging\suricata.rules") -split "`r?`n"
+            $torLines = $etLines | Where-Object { $_ -match 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
+            if ($torLines.Count -gt 0) {
+                $torDropText = ($torLines -join "`r`n") -replace '(?m)^alert tcp (\[[^\]]+\]) any -> \$HOME_NET any', 'drop tcp $HOME_NET any -> $1 any'
+                $torDropText = $torDropText -replace 'threshold:\s*type limit,\s*track by_src,\s*seconds \d+,\s*count \d+;\s*', ''
+                $stillAlert = ([regex]::Matches($torDropText, '(?m)^alert\s')).Count
+                if ($stillAlert -gt 0) { RLog "WARN $stillAlert ET TOR line(s) did not match the direction-reversal pattern and remain alert-only (ET format drift?)" }
+                [IO.File]::WriteAllText("$Staging\agb-tor-drop.rules", $torDropText, (New-Object Text.UTF8Encoding($false)))
+                $kept = $etLines | Where-Object { $_ -notmatch 'msg:"ET TOR (Known Tor Exit Node|Known Tor Relay/Router)' }
+                [IO.File]::WriteAllText("$Staging\suricata.rules", ($kept -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
+                if (Test-RulesSane "$Staging\agb-tor-drop.rules" 100) { $updated += 'agb-tor-drop.rules' }
+            }
+        }
+        if (Test-RulesSane "$Staging\suricata.rules" 10000) { $updated += 'suricata.rules' }
+    }
+} catch { RLog "ET refresh error: $($_.Exception.Message)" }
+
+# ---- agb rules from the repo (frozen if -RepoRef was a pinned commit SHA) ----
 try {
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-white.rules" -OutFile '$RuleDir\agb-white.rules' -UseBasicParsing
-} catch {}
-try {
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-heuristics.rules" -OutFile '$RuleDir\agb-heuristics.rules' -UseBasicParsing
-} catch {}
-`$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
-if (`$svc -and `$svc.Status -eq 'Running') { Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue }
-"@
-    [IO.File]::WriteAllText($agbTaskScript, $agbBody, (New-Object Text.UTF8Encoding($false)))
-    $agbAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$agbTaskScript`""
-    $agbTrigger   = New-ScheduledTaskTrigger -Daily -At '1:30PM'
-    $agbPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
-    Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-Rules-Deploy' -Action $agbAction -Trigger $agbTrigger -Principal $agbPrincipal -Force | Out-Null
-    Log "  scheduled task 'AGB-Suricata-IPS-Rules-Deploy' registered - daily 1:30 PM as SYSTEM (refreshes agb-black-drop.rules, agb-white.rules, agb-heuristics.rules)"
+    Invoke-WebRequest -Uri "$RawBase/agb-black.rules" -OutFile "$Staging\agb-black-src.rules" -UseBasicParsing
+    $dropText = [regex]::Replace([IO.File]::ReadAllText("$Staging\agb-black-src.rules"), '(?m)^alert\s', 'drop ')
+    [IO.File]::WriteAllText("$Staging\agb-black-drop.rules", $dropText, (New-Object Text.UTF8Encoding($false)))
+    if (Test-RulesSane "$Staging\agb-black-drop.rules" 1) { $updated += 'agb-black-drop.rules' }
+} catch { RLog "agb-black download failed: $($_.Exception.Message)" }
+foreach ($rf in @('agb-white.rules', 'agb-heuristics.rules')) {
+    try {
+        Invoke-WebRequest -Uri "$RawBase/$rf" -OutFile "$Staging\$rf" -UseBasicParsing
+        if (Test-RulesSane "$Staging\$rf" 1) { $updated += $rf }
+    } catch { RLog "$rf download failed: $($_.Exception.Message)" }
+}
+
+if ($updated.Count -eq 0) { RLog "nothing passed validation - current rules left untouched"; exit 0 }
+
+# ---- swap with backup + suricata -T validation + rollback ----
+$BackupDir = "$WorkRoot\rules-backup"
+if (Test-Path $BackupDir) { Remove-Item $BackupDir -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
+foreach ($f in $updated) {
+    if (Test-Path "$RuleDir\$f") { Copy-Item "$RuleDir\$f" "$BackupDir\$f" -Force }
+    Copy-Item "$Staging\$f" "$RuleDir\$f" -Force
+}
+& "$DeployRoot\suricata.exe" -c "$DeployRoot\suricata.yaml" -T 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    RLog "suricata -T FAILED with new rules (exit $LASTEXITCODE) - rolling back: $($updated -join ', ')"
+    foreach ($f in $updated) {
+        if (Test-Path "$BackupDir\$f") { Copy-Item "$BackupDir\$f" "$RuleDir\$f" -Force }
+        else { Remove-Item "$RuleDir\$f" -Force -ErrorAction SilentlyContinue }
+    }
+    exit 1
+}
+RLog "validated OK - applied: $($updated -join ', ')"
+
+# ---- single service restart, only if it was already running ----
+$svc = Get-Service -Name 'SuricataIPS' -ErrorAction SilentlyContinue
+if ($svc -and $svc.Status -eq 'Running') {
+    Restart-Service -Name 'SuricataIPS' -Force -ErrorAction SilentlyContinue
+    RLog "SuricataIPS restarted with refreshed rules"
+}
+'@
+
+    $refreshBody = $refreshTemplate.
+        Replace('__DEPLOYROOT__', $DeployRoot).
+        Replace('__RULEDIR__',    $RuleDir).
+        Replace('__WORKROOT__',   $WorkRoot).
+        Replace('__RAWBASE__',    $RepoRawBase).
+        Replace('__BLOCKTOR__',   $(if ($SkipTorBlock) { '$false' } else { '$true' }))
+    [IO.File]::WriteAllText($refreshScript, $refreshBody, (New-Object Text.UTF8Encoding($false)))
+
+    $rAction    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$refreshScript`""
+    $rTrigger   = New-ScheduledTaskTrigger -Daily -At '13:00'
+    $rPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+    Register-ScheduledTask -TaskName 'AGB-Suricata-IPS-Rules-Refresh' -Action $rAction -Trigger $rTrigger -Principal $rPrincipal -Force | Out-Null
+    # clean up the two legacy tasks from earlier versions of this script so
+    # a machine that ran the old build doesn't end up triple-refreshing
+    foreach ($legacy in @('AGB-Suricata-IPS-ET-Refresh', 'AGB-Suricata-IPS-Rules-Deploy')) {
+        Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    Log "  scheduled task 'AGB-Suricata-IPS-Rules-Refresh' registered - daily 13:00 as SYSTEM (staged, syntax-checked, suricata -T validated, auto-rollback, single restart; log: $IpsScriptsDir\refresh.log)"
 } else {
-    Log "  skipped (-SkipScheduledTask, or Step 10 rules setup did not complete)"
+    Log "  skipped (-SkipScheduledTask, or Step 11 rules setup did not complete)"
 }
 
 # ---------- Step 13: wire the IPS build's eve.json into the Wazuh agent ----------
@@ -928,8 +1032,15 @@ if ($SkipWazuhWiring) {
     if (Test-Path $arBinDir) {
         Log "  deploying agb-kill-block.ps1/.cmd (netsh Active Response) to $arBinDir"
         try {
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/wazuh-manager/active-response/agb-kill-block.ps1" -OutFile "$arBinDir\agb-kill-block.ps1" -UseBasicParsing
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/wazuh-manager/active-response/agb-kill-block.cmd" -OutFile "$arBinDir\agb-kill-block.cmd" -UseBasicParsing
+            Invoke-WebRequest -Uri "$RepoRawBase/wazuh-manager/active-response/agb-kill-block.ps1" -OutFile "$arBinDir\agb-kill-block.ps1" -UseBasicParsing
+            Invoke-WebRequest -Uri "$RepoRawBase/wazuh-manager/active-response/agb-kill-block.cmd" -OutFile "$arBinDir\agb-kill-block.cmd" -UseBasicParsing
+            # SECURITY: log the SHA256 of what was actually deployed - these
+            # files EXECUTE as SYSTEM when AR fires, so having the hash in the
+            # build log gives an audit trail to compare against the repo (and a
+            # reason to pin -RepoRef to a commit SHA instead of a branch).
+            foreach ($arFile in @("$arBinDir\agb-kill-block.ps1", "$arBinDir\agb-kill-block.cmd")) {
+                try { Log ("  SHA256 " + (Split-Path $arFile -Leaf) + ": " + (Get-FileHash $arFile -Algorithm SHA256).Hash) } catch {}
+            }
             Log "  deployed - this agent can now run the netsh kill+block AR alongside WinDivert's instant inline block"
         } catch {
             Warn "  could not deploy agb-kill-block AR script ($($_.Exception.Message)) - IPS blocking still works, just without the redundant netsh/kill backup layer"
@@ -995,6 +1106,22 @@ if ($SkipService) {
     if (-not $svcConfirmed) {
         Log "  not confirmed - skipping service install (build itself is unaffected; re-run with -SkipService to skip this prompt entirely, or -NoPrompt to auto-confirm everything)"
     } else {
+        # GOTCHA FIXED (review finding): nothing ever ran `suricata -T`
+        # before registering an always-on, auto-start service - a config or
+        # rules problem would only surface as an unattended failed service
+        # at the next boot. Validate the full config HERE, visibly, and
+        # refuse to install the service if it can't load.
+        Log "  validating full config with suricata -T before installing the service..."
+        $tExit = 1
+        Push-Location $DeployRoot
+        try {
+            & ".\suricata.exe" -c "suricata.yaml" -T 2>&1 | Out-Null
+            $tExit = $LASTEXITCODE
+        } finally { Pop-Location }
+        if ($tExit -ne 0) {
+            Warn "  suricata -T FAILED (exit $tExit) - refusing to install an always-on service on a config that will not load. Debug it: cd '$DeployRoot'; .\suricata.exe -c suricata.yaml -T -v"
+        } else {
+        Log "  config test passed"
         $svcName = "SuricataIPS"
         $existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
         if ($existingSvc) {
@@ -1016,11 +1143,55 @@ if ($SkipService) {
                 if ($svc -and $svc.Status -eq 'Running') {
                     Log "  '$svcName' installed and running (filter: $WinDivertFilter) - auto-starts on boot. Stop-Service $svcName / .\install-suricata-ips-service.ps1 -Remove to undo."
                 } else {
-                    Warn "  service created but not Running (status: $($svc.Status)) - check $DeployRoot\log\suricata.log"
+                    # GOTCHA FIXED (review finding): suricata.exe is a console
+                    # binary - registering it directly via sc.exe relies on it
+                    # implementing the SCM handshake, which classically fails
+                    # with error 1053 ("did not respond in a timely fashion")
+                    # even though the process itself works fine. It DID come up
+                    # Running in the validated 2026-07-04/05 build, but if it
+                    # ever doesn't, fall back to the WinSW service wrapper,
+                    # which handles the SCM protocol itself and just supervises
+                    # suricata.exe as a child process.
+                    Warn "  service not Running via plain sc.exe (status: $(if ($svc) { $svc.Status } else { 'missing' })) - likely the classic console-app/SCM 1053 issue. Retrying with the WinSW service wrapper..."
+                    & sc.exe delete $svcName | Out-Null
+                    Start-Sleep -Seconds 1
+                    $winswExe = "$DeployRoot\SuricataIPS-winsw.exe"
+                    $winswXmlPath = "$DeployRoot\SuricataIPS-winsw.xml"
+                    try {
+                        Invoke-WebRequest -Uri "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe" -OutFile $winswExe -UseBasicParsing
+                        $winswXml = @"
+<service>
+  <id>$svcName</id>
+  <name>Suricata IPS (WinDivert, experimental)</name>
+  <description>Experimental inline-blocking Suricata build (WinDivert). Filter: $WinDivertFilter. Managed by build-suricata-ips.ps1 (WinSW-wrapped).</description>
+  <executable>$DeployRoot\suricata.exe</executable>
+  <arguments>-c "$DeployRoot\suricata.yaml" --windivert "$WinDivertFilter"</arguments>
+  <workingdirectory>$DeployRoot</workingdirectory>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="5 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <log mode="roll"></log>
+</service>
+"@
+                        [IO.File]::WriteAllText($winswXmlPath, $winswXml, (New-Object Text.UTF8Encoding($false)))
+                        & $winswExe install $winswXmlPath 2>&1 | Out-Null
+                        & $winswExe start   $winswXmlPath 2>&1 | Out-Null
+                        Start-Sleep -Seconds 3
+                        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+                        if ($svc -and $svc.Status -eq 'Running') {
+                            Log "  '$svcName' installed and running via WinSW wrapper (filter: $WinDivertFilter) - auto-starts on boot. Remove: & '$winswExe' uninstall '$winswXmlPath'"
+                        } else {
+                            Warn "  still not Running even via WinSW - check $DeployRoot\log\suricata.log and the WinSW wrapper log next to $winswExe"
+                        }
+                    } catch {
+                        Warn "  WinSW fallback failed ($($_.Exception.Message)) - no service installed. The build itself is fine; test in the foreground instead: cd '$DeployRoot'; .\suricata.exe -c suricata.yaml --windivert `"$WinDivertFilter`""
+                    }
                 }
             } catch {
                 Warn "  Start-Service failed ($($_.Exception.Message)) - service is registered but not started"
             }
+        }
         }
     }
 }
@@ -1062,7 +1233,8 @@ if ($versionLine -and $wdLine -match "yes") {
         Write-Host "suricata.yaml is ready. agb-white.rules (pass, suppresses known-good noise)," -ForegroundColor Green
         Write-Host "suricata.rules (ET Open, alert-only, visibility), and agb-black-drop.rules" -ForegroundColor Green
         Write-Host "(your curated blacklist, action drop - THIS actually blocks) are all in place." -ForegroundColor Green
-        Write-Host "All refresh daily via the scheduled tasks (13:00 / 1:30 PM)." -ForegroundColor Green
+        Write-Host "All refresh daily at 13:00 via ONE validated task (staged download, syntax" -ForegroundColor Green
+        Write-Host "check, suricata -T, auto-rollback, single service restart)." -ForegroundColor Green
         if (Test-Path "$RuleDir\agb-tor-drop.rules") {
             Write-Host "agb-tor-drop.rules is also in place - blocks connections to known Tor relay/exit" -ForegroundColor Green
             Write-Host "nodes, not just .onion DNS queries (which real Tor Browser traffic never" -ForegroundColor Green

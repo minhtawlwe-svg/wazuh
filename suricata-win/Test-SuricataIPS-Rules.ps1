@@ -194,10 +194,15 @@ if ($torIp) {
 #    (same "^AGB BLACKLIST:" prefix match as the IP list rule)
 #    Alert-only - Tor Browser itself never generates this query (see project
 #    notes), this only catches a literal DNS lookup for a .onion name.
+#    GOTCHA FIXED: Resolve-DnsName never sends a real query for .onion at all
+#    (Windows treats it as a reserved special-use domain and silently skips
+#    it) - confirmed live via direct FileStream read of eve.json showing
+#    zero new bytes. nslookup does send a real query and correctly triggers
+#    both our rule and a bonus stock ET INFO signature for the same query.
 # ============================================================================
 Run-Test -Name ".onion DNS query (DNS-level only, not real Tor)" -ManagerRule "100802" `
     -SignaturePattern '^AGB BLACKLIST: Tor \.onion' `
-    -Action { Resolve-DnsName "testwazuhdetection.onion" -ErrorAction SilentlyContinue | Out-Null }
+    -Action { nslookup testwazuhdetection.onion 2>$null | Out-Null }
 
 # ============================================================================
 # 4. DGA domain heuristic (agb-heuristics.rules sid:1000200) -> manager 101000
@@ -299,6 +304,136 @@ Run-Test -Name "ICMP ping (reconnaissance)" -ManagerRule "100600 / 100601" `
     -SignaturePattern 'ICMP|PING' `
     -Note "ET Open's generic ICMP/PING signatures - may be noisy/already-suppressed depending on agb-white.rules" `
     -Action { & ping.exe -n 2 8.8.8.8 | Out-Null }
+
+# ============================================================================
+# 11. Port scan signatures (100602-100607) - ET SCAN "Suspicious inbound to
+#     <port>" signatures are $EXTERNAL_NET -> $HOME_NET (someone scanning
+#     INTO this host) - a single machine can't generate genuine inbound scan
+#     traffic against itself, so a miss here is expected, not a broken rule.
+#     Best-effort self-connect only for completeness.
+# ============================================================================
+Write-Host "`n=== Port scan signatures (100602-100607) - best-effort only ===" -ForegroundColor Cyan
+Write-Host "  These ET SCAN signatures match traffic INTO this host from an EXTERNAL source -" -ForegroundColor DarkGray
+Write-Host "  a single machine testing itself cannot generate genuine inbound scan traffic," -ForegroundColor DarkGray
+Write-Host "  so a miss here is expected and does not indicate a broken rule." -ForegroundColor DarkGray
+foreach ($p in @(5900,22,1433,5432,1521,3306)) {
+    Test-NetConnection 127.0.0.1 -Port $p -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
+}
+Write-Host "  -> would need a genuine external scanner (a second machine) to properly validate" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "Port scan sigs (VNC/SSH/MSSQL/PgSQL/Oracle/MySQL)"; Status = "SKIPPED"; ManagerRule = "100602-100607" }
+
+# ============================================================================
+# 12. Attack Response - "id check returned root" -> manager 100720
+#     testmynids.org is a purpose-built public test endpoint that
+#     intentionally serves the exact string GPL ATTACK_RESPONSE looks for -
+#     designed for safely testing IDS/IPS detection, not a real exploit.
+# ============================================================================
+Run-Test -Name "Attack Response (testmynids.org)" -ManagerRule "100720" `
+    -SignaturePattern 'ATTACK_RESPONSE|id check returned root' `
+    -Note "testmynids.org is a purpose-built public test site for this exact signature" `
+    -Action { & curl.exe -s -m 8 "http://testmynids.org/uid/index.html" -o $null 2>$null }
+
+# ============================================================================
+# 13. Unknown C2 - hardcoded IP match (Sysmon-based) -> manager 100820
+#     Manager rule matches Sysmon EID3 (network connect) to this exact IP -
+#     Sysmon-based only, no local Suricata/eve.json signal.
+# ============================================================================
+Write-Host "`n=== Unknown C2 hardcoded IP (Sysmon-based, manager 100820) ===" -ForegroundColor Cyan
+Test-NetConnection 47.236.236.2 -Port 443 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
+Write-Host "  fired - Sysmon-based, no local Suricata signal to check" -ForegroundColor DarkGray
+Write-Host "  -> confirm on Wazuh dashboard: rule 100820" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "Unknown C2 hardcoded IP"; Status = "MANUAL"; ManagerRule = "100820" }
+
+# ============================================================================
+# 14. Reverse-shell/downloader cmdline pattern (Sysmon-based) -> manager 100821
+#     Launches a harmless process whose command line merely CONTAINS one of
+#     the matched substrings (never actually invoked) - Sysmon logs the full
+#     command line regardless of whether anything inside it ever executes,
+#     so this is safe.
+# ============================================================================
+Write-Host "`n=== Reverse-shell cmdline pattern (Sysmon-based, manager 100821) ===" -ForegroundColor Cyan
+Start-Process cmd.exe -ArgumentList "/c","echo FromBase64String test - harmless text only, never invoked" -WindowStyle Hidden -Wait
+Write-Host "  fired - Sysmon-based, no local Suricata signal to check" -ForegroundColor DarkGray
+Write-Host "  -> confirm on Wazuh dashboard: rule 100821" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "Reverse-shell cmdline pattern"; Status = "MANUAL"; ManagerRule = "100821" }
+Write-Host "  (manager rule 100822 - script interpreter to external IP - is already covered" -ForegroundColor DarkGray
+Write-Host "   indirectly: every curl/PowerShell test above IS powershell.exe/curl.exe connecting" -ForegroundColor DarkGray
+Write-Host "   externally, matching 100822's own pattern)" -ForegroundColor DarkGray
+
+# ============================================================================
+# 15. Generic beaconing (any external IP) -> manager 101012
+#     Reuses the Tor IP - agb-tor-drop.rules is NOT netsh-AR-gated (unlike
+#     the IP blacklist), so repeat hits keep generating fresh Suricata
+#     alerts each time instead of being silently firewall-blocked after the
+#     first one. 11 rapid hits to cross the 10-hit/300s threshold. Manager-
+#     side correlation only - no local eve.json signal for 101012 itself,
+#     though each individual 101060 hit IS visible locally.
+# ============================================================================
+if ($torIp) {
+    Write-Host "`n=== Generic beaconing pattern (manager 101012) ===" -ForegroundColor Cyan
+    Log "generating 11 rapid connections to the same external IP ($torIp) to cross the 10-hit/300s threshold..."
+    for ($i = 1; $i -le 11; $i++) {
+        Test-NetConnection $torIp -Port 443 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
+    }
+    Write-Host "  fired - manager-side frequency correlation, no local eve.json signal for 101012 itself" -ForegroundColor DarkGray
+    Write-Host "  -> confirm on Wazuh dashboard: rule 101012 (needs 10+ alerts to the same external IP within 300s)" -ForegroundColor DarkYellow
+    $results += [pscustomobject]@{ Test = "Generic beaconing"; Status = "MANUAL"; ManagerRule = "101012" }
+} else {
+    Log "skipping generic beaconing test (no Tor IP available to reuse)"
+}
+
+# ============================================================================
+# 16. TLS anomaly - self-signed certificate -> manager 101030
+#     self-signed.badssl.com is a purpose-built public test site serving a
+#     deliberately self-signed cert. NOTE: unlike the other tests, this one
+#     depends on ET Open actually shipping a signature whose text matches
+#     "self signed"/"SUSPICIOUS TLS"/"invalid certificate" for this exact
+#     scenario - unconfirmed whether current ET Open has one, so a miss here
+#     is informative but not necessarily a bug.
+# ============================================================================
+Run-Test -Name "Self-signed TLS certificate (badssl.com)" -ManagerRule "101030" `
+    -SignaturePattern '(?i)self.?signed|SUSPICIOUS TLS|invalid.*certificate' `
+    -Note "Depends on ET Open shipping a matching signature for this scenario - unconfirmed, a miss is not necessarily a bug" `
+    -Action { & curl.exe -sk -m 8 "https://self-signed.badssl.com/" -o $null 2>$null }
+
+# ============================================================================
+# 17. SMB lateral movement pattern (Sysmon EID3) -> manager 101043
+#     Same approach as the RDP/WinRM test (RFC5737 documentation IPs,
+#     nothing actually contacted) but needs 20+ distinct hosts within 1 min
+#     for this SMB-specific, higher threshold.
+# ============================================================================
+Write-Host "`n=== SMB lateral movement pattern (Sysmon-based, manager 101043) ===" -ForegroundColor Cyan
+Log "generating SMB connection attempts to 21 distinct (unreachable) hosts..."
+for ($i = 1; $i -le 21; $i++) {
+    Test-NetConnection "192.0.2.$i" -Port 445 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
+}
+Write-Host "  fired - Sysmon-based, no local Suricata signal to check" -ForegroundColor DarkGray
+Write-Host "  -> confirm on Wazuh dashboard: rule 101043 (needs 20+ distinct hosts within 1 min)" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "SMB lateral movement scan"; Status = "MANUAL"; ManagerRule = "101043" }
+
+# ============================================================================
+# 18. Categories with no safe/reliable test payload
+#     These all require either a real malware/exploit sample, a genuine
+#     external attacker, or connecting to a real live-malicious IP we don't
+#     control - none of which is safe to script. Verify these by code review
+#     of the manager rule + underlying ET signature instead.
+# ============================================================================
+Write-Host "`n=== Categories with no safe test payload ===" -ForegroundColor Cyan
+$noSafeTest = @(
+    @{ Name = "Malware/Trojan Activity";        Rule = "100640-100641" }
+    @{ Name = "Cryptomining activity";           Rule = "100700" }
+    @{ Name = "Exploit Kit activity";            Rule = "100721" }
+    @{ Name = "Spamhaus DROP-list beacon";       Rule = "100740-100742" }
+    @{ Name = "Noise suppression (by design)";   Rule = "100760-100764" }
+    @{ Name = "Information Leak";                Rule = "100680" }
+    @{ Name = "Privilege Gain";                  Rule = "100780-100782" }
+)
+foreach ($t in $noSafeTest) {
+    Write-Host ("  SKIPPED  {0,-32} rule {1}" -f $t.Name, $t.Rule) -ForegroundColor DarkGray
+    $results += [pscustomobject]@{ Test = $t.Name; Status = "SKIPPED"; ManagerRule = $t.Rule }
+}
+Write-Host "  (100760-100764 are SUPPRESSION rules by design - the goal there is confirming" -ForegroundColor DarkGray
+Write-Host "   they DON'T escalate, not triggering an alert; not meaningfully testable in this format)" -ForegroundColor DarkGray
 
 # ============================================================================
 # Summary

@@ -331,34 +331,33 @@ $results += [pscustomobject]@{ Test = "JA3 fingerprint"; Status = "SKIPPED"; Man
 # 9. Lateral movement pattern (Sysmon EID3) -> manager 101041 (RDP/WinRM), 101043 (SMB)
 #    Manager-side correlation only (5+ distinct hosts in 2 min for RDP/WinRM,
 #    20+ in 1 min for SMB) - no local Suricata/eve.json signal.
-#    GOTCHA FOUND (not yet fixed): confirmed live via a Wazuh dashboard query
-#    that NEITHER 101041 nor 101043 fire from this test, despite it running
-#    without error. Root cause traced to Sysmon itself, not the manager rule:
-#    checked Sysmon's own Operational log directly (needs elevation - had to
-#    be done in an elevated window) and found ZERO EID3 (Network Connect)
-#    events for ANY of the test connection attempts - not just the original
-#    unreachable RFC5737 range (192.0.2.0/24), but also real, routable public
-#    IPs (8.8.8.8, 9.9.9.9, 1.1.1.1) on multiple ports (3389, 5985, 445, and
-#    an arbitrary high port), tried via both Test-NetConnection and a raw
-#    TcpClient connect. Sysmon DOES log EID3 in general (670 present in the
-#    last 3000 events) - it's specifically filtering out these test
-#    connections, most likely via its own config (sysmon-modular or similar)
-#    excluding certain ports/processes from network-connect logging to cut
-#    noise. Could not narrow this further without elevated access to
-#    Sysmon's config (`Sysmon64.exe -c` also requires admin). Treat 101041/
-#    101043 as UNVERIFIED by this script until someone with elevated access
-#    checks the actual Sysmon config for what it excludes.
+#    GOTCHA FULLY ROOT-CAUSED (2026-07-07): Sysmon's EID3 (Network Connect)
+#    only fires for connections that actually COMPLETE a TCP handshake -
+#    confirmed live: a successful Invoke-WebRequest produced 2 EID3 events
+#    within 2 seconds (time-windowed FilterXPath query, ruling out both log
+#    rotation and event-count-window misses), while every failed/refused/
+#    unreachable attempt in this script - the original RFC5737 range
+#    (192.0.2.0/24), real routable IPs (8.8.8.8/9.9.9.9/1.1.1.1) on multiple
+#    ports, via both Test-NetConnection and a raw TcpClient connect -
+#    produced zero. This is NOT a Sysmon config exclusion (powershell.exe is
+#    explicitly on the config's NetworkConnect include list, confirmed by
+#    dumping the actual config with Sysmon64.exe -c) - it's that these
+#    deliberately-safe test targets never complete a handshake at all, and
+#    Sysmon simply has nothing to log until one does. Genuinely testing
+#    101041/101043 needs 5-20+ REAL, DIFFERENT hosts with actual RDP/WinRM/
+#    SMB services listening and accepting connections - not practical or
+#    safe to construct from a single machine without dedicated multi-host
+#    test infrastructure (same limitation as the inbound port-scan tests).
 # ============================================================================
 Write-Host "`n=== Lateral movement pattern (Sysmon-based, manager 101041/101043) ===" -ForegroundColor Cyan
 Log "generating RDP/WinRM connection attempts to 6 distinct (unreachable) hosts..."
 for ($i = 1; $i -le 6; $i++) {
     Test-NetConnection "192.0.2.$i" -Port 3389 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
 }
-Write-Host "  fired the action, but CONFIRMED via live dashboard check + elevated Sysmon log" -ForegroundColor Yellow
-Write-Host "  read that this does NOT reliably reach the manager - Sysmon appears to filter" -ForegroundColor Yellow
-Write-Host "  these connection attempts from EID3 logging (config-based, not yet root-caused)" -ForegroundColor Yellow
-Write-Host "  -> UNVERIFIED: rule 101041 (needs 5+ distinct hosts within 2 min)" -ForegroundColor DarkYellow
-$results += [pscustomobject]@{ Test = "Lateral movement (RDP/WinRM)"; Status = "FAIL"; ManagerRule = "101041" }
+Write-Host "  SKIPPED (in effect) - Sysmon's EID3 only logs completed handshakes, and these" -ForegroundColor DarkGray
+Write-Host "  test targets never accept a connection - confirmed root cause, not a bug in" -ForegroundColor DarkGray
+Write-Host "  the manager rule. Needs 5+ REAL, responsive RDP/WinRM hosts to genuinely test." -ForegroundColor DarkGray
+$results += [pscustomobject]@{ Test = "Lateral movement (RDP/WinRM)"; Status = "SKIPPED"; ManagerRule = "101041" }
 
 # ============================================================================
 # 10. Reconnaissance / ICMP (manager 100600/100601)
@@ -399,18 +398,23 @@ Run-Test -Name "Attack Response (testmynids.org)" -ManagerRule "100720" `
 # ============================================================================
 # 13. Unknown C2 - hardcoded IP match (Sysmon-based) -> manager 100820
 #     Manager rule matches Sysmon EID3 (network connect) to this exact IP.
-#     Same GOTCHA as the lateral-movement tests (101041/101043): Sysmon has
-#     been confirmed, via its own elevated Operational log, to not log EID3
-#     for scripted test connections in general on this machine (root cause
-#     not fully isolated - likely a Sysmon config exclusion). Treat as
-#     unverified rather than assuming this specific IP is the problem.
+#     GOTCHA FULLY ROOT-CAUSED (2026-07-07): Sysmon's EID3 only logs
+#     connections that actually complete a TCP handshake - confirmed live by
+#     comparing a successful Invoke-WebRequest (produced 2 EID3 events
+#     within 2s) against every failed/refused/timed-out attempt in this
+#     script (produced zero, checked via a time-windowed FilterXPath query,
+#     not just event count - ruled out log rotation too). 47.236.236.2:443
+#     itself does not accept connections (confirmed: TcpTestSucceeded =
+#     False), so no script-driven test can make Sysmon log anything for
+#     this exact hardcoded IP - it's not a config or logging bug, the
+#     target simply never completes a handshake. Untestable from this
+#     script as long as that specific IP stays unresponsive.
 # ============================================================================
 Write-Host "`n=== Unknown C2 hardcoded IP (Sysmon-based, manager 100820) ===" -ForegroundColor Cyan
-Test-NetConnection 47.236.236.2 -Port 443 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
-Write-Host "  fired the action - Sysmon EID3 logging for scripted test connections is" -ForegroundColor Yellow
-Write-Host "  unconfirmed on this machine in general (see the lateral-movement test notes)" -ForegroundColor Yellow
-Write-Host "  -> UNVERIFIED: rule 100820" -ForegroundColor DarkYellow
-$results += [pscustomobject]@{ Test = "Unknown C2 hardcoded IP"; Status = "FAIL"; ManagerRule = "100820" }
+Write-Host "  SKIPPED - 47.236.236.2:443 does not accept connections, and Sysmon's EID3" -ForegroundColor DarkGray
+Write-Host "  only logs connections that complete a handshake - confirmed via live testing" -ForegroundColor DarkGray
+Write-Host "  (see the lateral-movement test comments for the full root-cause investigation)" -ForegroundColor DarkGray
+$results += [pscustomobject]@{ Test = "Unknown C2 hardcoded IP"; Status = "SKIPPED"; ManagerRule = "100820" }
 
 # ============================================================================
 # 14. Reverse-shell/downloader cmdline pattern (Sysmon-based) -> manager 100821
@@ -467,19 +471,18 @@ Run-Test -Name "Self-signed TLS certificate (badssl.com)" -ManagerRule "101030" 
 # ============================================================================
 # 17. SMB lateral movement pattern (Sysmon EID3) -> manager 101043
 #     Same approach as the RDP/WinRM test but needs 20+ distinct hosts within
-#     1 min. Same GOTCHA as 101041 above (see that comment block) - confirmed
-#     Sysmon does not log EID3 for these attempts regardless of target
-#     (unreachable or real/routable) or connection method.
+#     1 min. Same fully-root-caused GOTCHA as 101041 above (see that comment
+#     block) - Sysmon's EID3 only fires for completed handshakes, and these
+#     deliberately-unreachable test targets never complete one.
 # ============================================================================
 Write-Host "`n=== SMB lateral movement pattern (Sysmon-based, manager 101043) ===" -ForegroundColor Cyan
 Log "generating SMB connection attempts to 21 distinct (unreachable) hosts..."
 for ($i = 1; $i -le 21; $i++) {
     Test-NetConnection "192.0.2.$i" -Port 445 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
 }
-Write-Host "  fired the action, but CONFIRMED via live testing that Sysmon does not log EID3" -ForegroundColor Yellow
-Write-Host "  for these attempts (see the RDP/WinRM test above for the full investigation)" -ForegroundColor Yellow
-Write-Host "  -> UNVERIFIED: rule 101043 (needs 20+ distinct hosts within 1 min)" -ForegroundColor DarkYellow
-$results += [pscustomobject]@{ Test = "SMB lateral movement scan"; Status = "FAIL"; ManagerRule = "101043" }
+Write-Host "  SKIPPED (in effect) - same root cause as the RDP/WinRM test above: Sysmon" -ForegroundColor DarkGray
+Write-Host "  needs a completed handshake to log EID3, and these targets never provide one." -ForegroundColor DarkGray
+$results += [pscustomobject]@{ Test = "SMB lateral movement scan"; Status = "SKIPPED"; ManagerRule = "101043" }
 
 # ============================================================================
 # 17b. Spamhaus DROP-list beacon -> manager 100740 (base), 100742 (escalation,

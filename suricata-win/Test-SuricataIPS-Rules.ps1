@@ -330,18 +330,35 @@ $results += [pscustomobject]@{ Test = "JA3 fingerprint"; Status = "SKIPPED"; Man
 # ============================================================================
 # 9. Lateral movement pattern (Sysmon EID3) -> manager 101041 (RDP/WinRM), 101043 (SMB)
 #    Manager-side correlation only (5+ distinct hosts in 2 min for RDP/WinRM,
-#    20+ in 1 min for SMB) - no local Suricata/eve.json signal. Uses
-#    unreachable RFC5737 documentation IPs (192.0.2.0/24) so nothing is
-#    actually contacted, but Sysmon still logs the outbound connection attempt.
+#    20+ in 1 min for SMB) - no local Suricata/eve.json signal.
+#    GOTCHA FOUND (not yet fixed): confirmed live via a Wazuh dashboard query
+#    that NEITHER 101041 nor 101043 fire from this test, despite it running
+#    without error. Root cause traced to Sysmon itself, not the manager rule:
+#    checked Sysmon's own Operational log directly (needs elevation - had to
+#    be done in an elevated window) and found ZERO EID3 (Network Connect)
+#    events for ANY of the test connection attempts - not just the original
+#    unreachable RFC5737 range (192.0.2.0/24), but also real, routable public
+#    IPs (8.8.8.8, 9.9.9.9, 1.1.1.1) on multiple ports (3389, 5985, 445, and
+#    an arbitrary high port), tried via both Test-NetConnection and a raw
+#    TcpClient connect. Sysmon DOES log EID3 in general (670 present in the
+#    last 3000 events) - it's specifically filtering out these test
+#    connections, most likely via its own config (sysmon-modular or similar)
+#    excluding certain ports/processes from network-connect logging to cut
+#    noise. Could not narrow this further without elevated access to
+#    Sysmon's config (`Sysmon64.exe -c` also requires admin). Treat 101041/
+#    101043 as UNVERIFIED by this script until someone with elevated access
+#    checks the actual Sysmon config for what it excludes.
 # ============================================================================
 Write-Host "`n=== Lateral movement pattern (Sysmon-based, manager 101041/101043) ===" -ForegroundColor Cyan
 Log "generating RDP/WinRM connection attempts to 6 distinct (unreachable) hosts..."
 for ($i = 1; $i -le 6; $i++) {
     Test-NetConnection "192.0.2.$i" -Port 3389 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
 }
-Write-Host "  fired - Sysmon-based, no local Suricata signal to check" -ForegroundColor DarkGray
-Write-Host "  -> confirm on Wazuh dashboard: rule 101041 (needs 5+ distinct hosts within 2 min)" -ForegroundColor DarkYellow
-$results += [pscustomobject]@{ Test = "Lateral movement (RDP/WinRM)"; Status = "MANUAL"; ManagerRule = "101041" }
+Write-Host "  fired the action, but CONFIRMED via live dashboard check + elevated Sysmon log" -ForegroundColor Yellow
+Write-Host "  read that this does NOT reliably reach the manager - Sysmon appears to filter" -ForegroundColor Yellow
+Write-Host "  these connection attempts from EID3 logging (config-based, not yet root-caused)" -ForegroundColor Yellow
+Write-Host "  -> UNVERIFIED: rule 101041 (needs 5+ distinct hosts within 2 min)" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "Lateral movement (RDP/WinRM)"; Status = "FAIL"; ManagerRule = "101041" }
 
 # ============================================================================
 # 10. Reconnaissance / ICMP (manager 100600/100601)
@@ -381,14 +398,19 @@ Run-Test -Name "Attack Response (testmynids.org)" -ManagerRule "100720" `
 
 # ============================================================================
 # 13. Unknown C2 - hardcoded IP match (Sysmon-based) -> manager 100820
-#     Manager rule matches Sysmon EID3 (network connect) to this exact IP -
-#     Sysmon-based only, no local Suricata/eve.json signal.
+#     Manager rule matches Sysmon EID3 (network connect) to this exact IP.
+#     Same GOTCHA as the lateral-movement tests (101041/101043): Sysmon has
+#     been confirmed, via its own elevated Operational log, to not log EID3
+#     for scripted test connections in general on this machine (root cause
+#     not fully isolated - likely a Sysmon config exclusion). Treat as
+#     unverified rather than assuming this specific IP is the problem.
 # ============================================================================
 Write-Host "`n=== Unknown C2 hardcoded IP (Sysmon-based, manager 100820) ===" -ForegroundColor Cyan
 Test-NetConnection 47.236.236.2 -Port 443 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
-Write-Host "  fired - Sysmon-based, no local Suricata signal to check" -ForegroundColor DarkGray
-Write-Host "  -> confirm on Wazuh dashboard: rule 100820" -ForegroundColor DarkYellow
-$results += [pscustomobject]@{ Test = "Unknown C2 hardcoded IP"; Status = "MANUAL"; ManagerRule = "100820" }
+Write-Host "  fired the action - Sysmon EID3 logging for scripted test connections is" -ForegroundColor Yellow
+Write-Host "  unconfirmed on this machine in general (see the lateral-movement test notes)" -ForegroundColor Yellow
+Write-Host "  -> UNVERIFIED: rule 100820" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "Unknown C2 hardcoded IP"; Status = "FAIL"; ManagerRule = "100820" }
 
 # ============================================================================
 # 14. Reverse-shell/downloader cmdline pattern (Sysmon-based) -> manager 100821
@@ -444,18 +466,20 @@ Run-Test -Name "Self-signed TLS certificate (badssl.com)" -ManagerRule "101030" 
 
 # ============================================================================
 # 17. SMB lateral movement pattern (Sysmon EID3) -> manager 101043
-#     Same approach as the RDP/WinRM test (RFC5737 documentation IPs,
-#     nothing actually contacted) but needs 20+ distinct hosts within 1 min
-#     for this SMB-specific, higher threshold.
+#     Same approach as the RDP/WinRM test but needs 20+ distinct hosts within
+#     1 min. Same GOTCHA as 101041 above (see that comment block) - confirmed
+#     Sysmon does not log EID3 for these attempts regardless of target
+#     (unreachable or real/routable) or connection method.
 # ============================================================================
 Write-Host "`n=== SMB lateral movement pattern (Sysmon-based, manager 101043) ===" -ForegroundColor Cyan
 Log "generating SMB connection attempts to 21 distinct (unreachable) hosts..."
 for ($i = 1; $i -le 21; $i++) {
     Test-NetConnection "192.0.2.$i" -Port 445 -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction SilentlyContinue | Out-Null
 }
-Write-Host "  fired - Sysmon-based, no local Suricata signal to check" -ForegroundColor DarkGray
-Write-Host "  -> confirm on Wazuh dashboard: rule 101043 (needs 20+ distinct hosts within 1 min)" -ForegroundColor DarkYellow
-$results += [pscustomobject]@{ Test = "SMB lateral movement scan"; Status = "MANUAL"; ManagerRule = "101043" }
+Write-Host "  fired the action, but CONFIRMED via live testing that Sysmon does not log EID3" -ForegroundColor Yellow
+Write-Host "  for these attempts (see the RDP/WinRM test above for the full investigation)" -ForegroundColor Yellow
+Write-Host "  -> UNVERIFIED: rule 101043 (needs 20+ distinct hosts within 1 min)" -ForegroundColor DarkYellow
+$results += [pscustomobject]@{ Test = "SMB lateral movement scan"; Status = "FAIL"; ManagerRule = "101043" }
 
 # ============================================================================
 # 17b. Spamhaus DROP-list beacon -> manager 100740 (base), 100742 (escalation,

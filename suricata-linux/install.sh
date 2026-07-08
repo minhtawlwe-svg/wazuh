@@ -37,13 +37,10 @@ WAZUH_START_TIMEOUT=45
 INSTALL_LOG="/var/log/suricata-install.log"
 # FIX: SURICATA_REPO_URL is accepted but was silently unused; kept for future use
 SURICATA_REPO_URL=""
-<<<<<<< Updated upstream
 # HOME_NET: monitored network range(s) for direction-aware rules.
 # Empty = leave whatever is already in suricata.yaml untouched.
 # Override with -HomeNet "10.0.0.0/8,192.168.0.0/16" (or "any").
 HOME_NET_OVERRIDE=""
-=======
->>>>>>> Stashed changes
 
 # -------------------------------------
 # Logging
@@ -227,7 +224,6 @@ require_wazuh_running() {
 }
 
 # -------------------------------------
-<<<<<<< Updated upstream
 # APT install path for Suricata.
 #
 # The OISF Suricata >= 7.x package bundles the `suricata-update` tool inside
@@ -320,8 +316,6 @@ apt_install_suricata() {
 }
 
 # -------------------------------------
-=======
->>>>>>> Stashed changes
 # Install Suricata + suricata-update
 # -------------------------------------
 install_suricata() {
@@ -339,31 +333,7 @@ install_suricata() {
         log "Adding OISF repository and installing Suricata..."
         case "$PKG_FAMILY" in
             apt)
-<<<<<<< Updated upstream
                 apt_install_suricata
-=======
-                if ! apt-cache policy suricata 2>/dev/null | grep -q 'oisf/suricata-stable'; then
-                    log "Adding OISF Launchpad PPA: ppa:oisf/suricata-stable"
-                    DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common >/dev/null 2>&1 || true
-                    add-apt-repository -y ppa:oisf/suricata-stable || die "add-apt-repository failed"
-                    apt-get update -y || die "apt-get update failed"
-                fi
-                DEBIAN_FRONTEND=noninteractive apt-get install -y suricata \
-                    || die "apt-get install suricata failed"
-                # xmllint for ossec.conf validation (best-effort)
-                DEBIAN_FRONTEND=noninteractive apt-get install -y libxml2-utils >/dev/null 2>&1 \
-                    || log "libxml2-utils install failed (ossec.conf XML validation will be skipped)"
-                if command -v pip3 >/dev/null 2>&1; then
-                    pip3 install --quiet --upgrade --break-system-packages suricata-update 2>/dev/null || \
-                    pip3 install --quiet --upgrade suricata-update 2>/dev/null || \
-                        log "pip install suricata-update failed (continuing on direct tarball path)"
-                elif command -v pip >/dev/null 2>&1; then
-                    pip install --quiet --upgrade suricata-update 2>/dev/null || \
-                        log "pip install suricata-update failed (continuing on direct tarball path)"
-                else
-                    log "pip not present; skipping suricata-update (direct tarball path used instead)"
-                fi
->>>>>>> Stashed changes
                 ;;
             rpm)
                 if ! rpm -q epel-release >/dev/null 2>&1; then
@@ -539,7 +509,6 @@ patch_yaml() {
 }
 
 # -------------------------------------
-<<<<<<< Updated upstream
 # Bind capture interface into af-packet + optionally set HOME_NET.
 #
 # PRIMARY method is a targeted line editor that rewrites ONLY the af-packet
@@ -623,8 +592,6 @@ PY
 }
 
 # -------------------------------------
-=======
->>>>>>> Stashed changes
 # ET Open rules
 # -------------------------------------
 install_etopen_rules() {
@@ -780,7 +747,6 @@ src, eve, dst = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(src, 'r', encoding='utf-8') as f:
     content = f.read()
 
-<<<<<<< Updated upstream
 # Remove ANY existing Suricata eve.json <localfile> block, regardless of OS
 # path style. This covers:
 #   - Linux paths   : /var/log/suricata/eve.json
@@ -799,11 +765,6 @@ new, removed = eve_pat.subn('', content)
 # their only child (the stale localfile) was removed. Whitespace-only bodies.
 empty_shell = re.compile(r'[ \t]*<ossec_config>\s*</ossec_config>\s*', re.DOTALL)
 new = empty_shell.sub('', new)
-=======
-# Remove any existing eve.json localfile block (multiline safe)
-pat = re.compile(r'[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*', re.DOTALL)
-new = pat.sub('', content)
->>>>>>> Stashed changes
 
 block = ('  <localfile>\n'
          '    <log_format>json</log_format>\n'
@@ -819,26 +780,6 @@ else:
 
 with open(dst, 'w', encoding='utf-8') as f:
     f.write(new)
-<<<<<<< Updated upstream
-=======
-PY
-
-    # FIX: validate XML well-formedness BEFORE overwriting the live config,
-    # so a malformed patch can never break wazuh-agent startup.
-    if command -v xmllint >/dev/null 2>&1; then
-        if ! xmllint --noout "$tmp" 2>/tmp/ossec-xmllint.log; then
-            log "xmllint errors: $(cat /tmp/ossec-xmllint.log)"
-            rm -f "$tmp"
-            die "Patched ossec.conf is not well-formed XML — aborting, original left untouched (backup: ${WAZUH_CONF}.${ts}.bak)"
-        fi
-        log "Patched ossec.conf passed xmllint validation."
-    else
-        log "xmllint not available — skipping XML validation (install libxml2-utils to enable)."
-    fi
-
-    mv "$tmp" "$WAZUH_CONF"
-    log "Patched Wazuh ossec.conf -> $EVE_LOG"
->>>>>>> Stashed changes
 
 sys.stderr.write("STRIPPED_EVE_BLOCKS=%d\n" % removed)
 PY
@@ -948,7 +889,6 @@ PY
 }
 
 # -------------------------------------
-<<<<<<< Updated upstream
 # Clean Wazuh restart.
 #
 # The wazuh-agent unit can fail to restart when a previous run left an orphaned
@@ -1055,8 +995,6 @@ wazuh_is_up() {
 }
 
 # -------------------------------------
-=======
->>>>>>> Stashed changes
 # Drop maintenance script
 # FIX: all four placeholders are now substituted by sed:
 #      __LOG_DIR__, __RULE_DIR__, __MAX_EVE_BYTES__, __KEEP_ROTATED_LOGS__
@@ -1235,7 +1173,6 @@ write_logrotate() {
 }
 EOF
     log "Wrote /etc/logrotate.d/suricata (size threshold: ${size_human})"
-<<<<<<< Updated upstream
 }
 
 # -------------------------------------
@@ -1346,8 +1283,6 @@ prompt_for_homenet() {
         fi
         echo "  Invalid format. Use CIDR/IP list like 192.168.1.0/24,10.50.0.0/16 or 'any'." >&2
     done
-=======
->>>>>>> Stashed changes
 }
 
 # -------------------------------------
@@ -1367,7 +1302,6 @@ main() {
     install_suricata
 
     log "Detecting capture interfaces..."
-<<<<<<< Updated upstream
 
     # Resolve the single capture interface:
     #   -Interface given      -> validate & use it (no prompt)
@@ -1385,17 +1319,6 @@ main() {
 
     # Resolve HOME_NET (prompt only if -HomeNet not supplied and interactive).
     prompt_for_homenet
-=======
-    local ifaces=()
-    while IFS= read -r line; do
-        [ -n "$line" ] && ifaces+=("$line")
-    done < <(detect_interfaces)
-
-    if [ ${#ifaces[@]} -eq 0 ]; then
-        die "No capture interface found. Pass -Interface <name>."
-    fi
-    log "Capture interfaces: ${ifaces[*]}"
->>>>>>> Stashed changes
 
     patch_yaml "$SURICATA_YAML"
     install_etopen_rules

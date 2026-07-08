@@ -64,24 +64,92 @@ foreach ($protectedPath in @($DeployRoot, $IpsWorkRoot, $IpsWorkRootLegacy)) {
     }
 }
 
-Write-Host "===== PART 1/2: IDS-mode Suricata (agb-full-uninstall.ps1) =====" -ForegroundColor Green
-# Downloaded and run rather than duplicated here, so this always matches
-# whatever the real IDS uninstaller currently does - no risk of the two
-# drifting apart over time.
+# ----------------------------------------------------------------------
+# INLINE IDS-mode cleanup fallback - a self-contained mirror of the core
+# of agb-full-uninstall.ps1, used ONLY when neither a local copy nor a
+# fresh download of that script is available (e.g. offline, or GitHub
+# rate-limiting the raw download with a 429 - which is exactly what left
+# the IDS half silently un-cleaned before this was added). Kept as a
+# subset deliberately: it covers every artifact agb-full-setup.ps1
+# creates, so nothing is ever left behind even with no network at all.
+# ----------------------------------------------------------------------
+function Invoke-IdsCleanupInline {
+    Log "running BUILT-IN IDS cleanup (no external script needed)"
+    # 1. service
+    $svc = Get-Service Suricata -EA SilentlyContinue
+    if ($svc) { Act "stop+delete service Suricata (status $($svc.Status))"; if (-not $WhatIfOnly) { Stop-Service Suricata -Force -EA SilentlyContinue; Start-Sleep 2; & sc.exe delete Suricata | Out-Null } }
+    # 2. stray process
+    $proc = Get-Process suricata -EA SilentlyContinue
+    if ($proc) { Act "kill suricata.exe (pid $($proc.Id -join ','))"; if (-not $WhatIfOnly) { $proc | Stop-Process -Force -EA SilentlyContinue } }
+    # 3. MSI uninstall entries
+    $uns = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue | Where-Object { $_.DisplayName -match 'Suricata' }
+    foreach ($u in $uns) { $code = Split-Path $u.PSPath -Leaf; Act "uninstall MSI '$($u.DisplayName)' ($code)"; if (-not $WhatIfOnly) { Start-Process msiexec.exe -ArgumentList "/x $code /qn /norestart" -Wait } }
+    # 4. scheduled tasks (both Suricata's own + AGB-Suricata-Rules-Deploy)
+    Get-ScheduledTask -EA SilentlyContinue | Where-Object { $_.TaskName -match 'Suricata' } | ForEach-Object { Act "remove scheduled task '$($_.TaskName)'"; if (-not $WhatIfOnly) { Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -EA SilentlyContinue } }
+    # 5. directories (also removes agb-white/agb-black rules + deploy script + logs living under them)
+    foreach ($d in @('C:\Program Files\Suricata','C:\Program Files (x86)\Suricata','C:\ProgramData\Suricata',"$env:USERPROFILE\AppData\Local\Programs\Suricata")) {
+        if (Test-Path -LiteralPath $d) { $sz = (Get-ChildItem $d -Recurse -EA SilentlyContinue | Measure-Object Length -Sum).Sum; Act "delete $d ($([math]::Round($sz/1MB,1)) MB)"; if (-not $WhatIfOnly) { Remove-Item $d -Recurse -Force -EA SilentlyContinue } }
+    }
+    # 6. Active Response scripts in the Wazuh agent bin
+    $arBin = "C:\Program Files (x86)\ossec-agent\active-response\bin"
+    foreach ($f in @("agb-kill-block.ps1","agb-kill-block.cmd")) { $p = Join-Path $arBin $f; if (Test-Path $p) { Act "remove $p"; if (-not $WhatIfOnly) { Remove-Item $p -Force -EA SilentlyContinue } } }
+    # 7. eve.json <localfile> out of ossec.conf (+ restart agent)
+    $conf = @('C:\Program Files (x86)\ossec-agent\ossec.conf','C:\Program Files\ossec-agent\ossec.conf') | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($conf) {
+        $c = Get-Content -LiteralPath $conf -Raw -EA SilentlyContinue
+        if ($c) {
+            $n = [regex]::Replace($c, "(?is)[ \t]*<localfile>(?:(?!</localfile>).)*?eve\.json(?:(?!</localfile>).)*?</localfile>\s*", "`r`n")
+            if ($n -ne $c) { Act "strip eve.json <localfile> from ossec.conf + restart WazuhSvc"; if (-not $WhatIfOnly) { Copy-Item $conf "$conf.bak-deepclean-$(Get-Date -Format yyyyMMddHHmmss)" -Force; [IO.File]::WriteAllText($conf, $n, (New-Object Text.UTF8Encoding($false))); Restart-Service WazuhSvc -EA SilentlyContinue } }
+        } else { Warn "could not read $conf (locked or permission) - skipping eve.json localfile strip" }
+    }
+    # 8. Defender exclusions + Suricata/AGB firewall rules
+    try { (Get-MpPreference -EA SilentlyContinue).ExclusionPath | Where-Object { $_ -match 'Suricata' } | ForEach-Object { Act "remove Defender exclusion $_"; if (-not $WhatIfOnly) { Remove-MpPreference -ExclusionPath $_ -EA SilentlyContinue } } } catch {}
+    Get-NetFirewallRule -EA SilentlyContinue | Where-Object { $_.DisplayName -match 'Suricata' -or $_.DisplayName -match '^AGB-BLOCK-' } | ForEach-Object { Act "remove firewall rule '$($_.DisplayName)'"; if (-not $WhatIfOnly) { Remove-NetFirewallRule -Name $_.Name -EA SilentlyContinue } }
+    # 9/10. optional Npcap / Wazuh agent
+    if ($AlsoRemoveNpcap) { $np = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue | Where-Object { $_.DisplayName -match 'Npcap' } | Select-Object -First 1; if ($np.UninstallString) { Act "uninstall Npcap (interactive)"; if (-not $WhatIfOnly) { Start-Process $np.UninstallString -Wait } } } else { Log "keeping Npcap (pass -AlsoRemoveNpcap to remove)" }
+    if ($RemoveWazuhAgent) { $wa = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue | Where-Object { $_.DisplayName -match 'Wazuh' } | Select-Object -First 1; if ($wa) { $code = Split-Path $wa.PSPath -Leaf; Act "uninstall Wazuh agent '$($wa.DisplayName)'"; if (-not $WhatIfOnly) { Start-Process msiexec.exe -ArgumentList "/x $code /qn /norestart" -Wait } } } else { Log "keeping Wazuh agent (pass -RemoveWazuhAgent to remove)" }
+    Log "built-in IDS cleanup done"
+}
+
+Write-Host "===== PART 1/2: IDS-mode Suricata =====" -ForegroundColor Green
+# Robust 3-tier strategy so the IDS half ALWAYS runs, even offline / when
+# GitHub 429-rate-limits the raw download (which used to silently skip it):
+#   1. a local copy of agb-full-uninstall.ps1 sitting next to this script
+#      (i.e. run from a repo clone) - preferred, always current, no network
+#   2. otherwise download it from GitHub, retrying a few times on transient
+#      failures (429s clear quickly)
+#   3. if BOTH fail, fall back to the self-contained Invoke-IdsCleanupInline
+#      above - covers every IDS artifact with zero network dependency
 $Base = "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win"
-$Tmp  = "$env:TEMP\agb-uninstall-all"
-New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
 [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
-$idsUninstaller = "$Tmp\agb-full-uninstall.ps1"
-try {
-    Invoke-WebRequest -Uri "$Base/agb-full-uninstall.ps1" -OutFile $idsUninstaller -UseBasicParsing
-    $idsArgs = @()
-    if ($AlsoRemoveNpcap) { $idsArgs += "-AlsoRemoveNpcap" }
-    if ($RemoveWazuhAgent) { $idsArgs += "-RemoveWazuhAgent" }
-    if ($WhatIfOnly) { $idsArgs += "-WhatIfOnly" }
-    & powershell.exe -ExecutionPolicy Bypass -File $idsUninstaller @idsArgs
-} catch {
-    Warn "Could not run agb-full-uninstall.ps1 ($($_.Exception.Message)) - skipping IDS-mode cleanup, continuing with IPS cleanup"
+$idsArgs = @()
+if ($AlsoRemoveNpcap) { $idsArgs += "-AlsoRemoveNpcap" }
+if ($RemoveWazuhAgent) { $idsArgs += "-RemoveWazuhAgent" }
+if ($WhatIfOnly) { $idsArgs += "-WhatIfOnly" }
+
+$localCopy = Join-Path $PSScriptRoot 'agb-full-uninstall.ps1'
+$ran = $false
+if (Test-Path $localCopy) {
+    Log "using local agb-full-uninstall.ps1 next to this script (no download needed)"
+    & powershell.exe -ExecutionPolicy Bypass -File $localCopy @idsArgs
+    $ran = $true
+} else {
+    $Tmp = "$env:TEMP\agb-uninstall-all"; New-Item -ItemType Directory -Path $Tmp -Force | Out-Null
+    $idsUninstaller = "$Tmp\agb-full-uninstall.ps1"
+    for ($try = 1; $try -le 3 -and -not $ran; $try++) {
+        try {
+            Invoke-WebRequest -Uri "$Base/agb-full-uninstall.ps1" -OutFile $idsUninstaller -UseBasicParsing
+            & powershell.exe -ExecutionPolicy Bypass -File $idsUninstaller @idsArgs
+            $ran = $true
+        } catch {
+            Warn "download of agb-full-uninstall.ps1 failed (attempt $try/3): $($_.Exception.Message)"
+            if ($try -lt 3) { Start-Sleep -Seconds 5 }
+        }
+    }
+}
+if (-not $ran) {
+    Warn "could not obtain agb-full-uninstall.ps1 (offline / GitHub rate-limited) - using the BUILT-IN cleanup instead so the IDS half still fully runs"
+    Invoke-IdsCleanupInline
 }
 
 Write-Host "`n===== PART 2/2: Experimental IPS (WinDivert) build =====" -ForegroundColor Green

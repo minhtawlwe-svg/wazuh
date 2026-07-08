@@ -942,9 +942,19 @@ foreach ($f in $updated) {
     if (Test-Path "$RuleDir\$f") { Copy-Item "$RuleDir\$f" "$BackupDir\$f" -Force }
     Copy-Item "$Staging\$f" "$RuleDir\$f" -Force
 }
-& "$DeployRoot\suricata.exe" -c "$DeployRoot\suricata.yaml" -T 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    RLog "suricata -T FAILED with new rules (exit $LASTEXITCODE) - rolling back: $($updated -join ', ')"
+$rtest = & "$DeployRoot\suricata.exe" -c "$DeployRoot\suricata.yaml" -T 2>&1
+# GOTCHA: suricata -T ALWAYS exits non-zero on Windows - ~9 ET Open rules
+# use the file.magic keyword (no libmagic on the Windows build) and it then
+# prints "Loading signatures failed" as a summary. Neither is a real
+# failure - at runtime the engine loads all 51k good rules and runs fine.
+# Checking raw $LASTEXITCODE here would roll back EVERY daily refresh, so
+# rules would never actually update. Roll back only on an error line that
+# is neither file.magic nor that summary; a genuinely bad rule still emits
+# its own specific parse-error line that survives this filter.
+$rerr = @($rtest | Where-Object { "$_" -match '^E:' -and "$_" -notmatch 'file\.magic' -and "$_" -notmatch 'Loading signatures failed' })
+if ($rerr.Count -gt 0) {
+    RLog "suricata -T found REAL errors with new rules - rolling back: $($updated -join ', ')"
+    $rerr | Select-Object -First 5 | ForEach-Object { RLog "  $_" }
     foreach ($f in $updated) {
         if (Test-Path "$BackupDir\$f") { Copy-Item "$BackupDir\$f" "$RuleDir\$f" -Force }
         else { Remove-Item "$RuleDir\$f" -Force -ErrorAction SilentlyContinue }
@@ -1058,7 +1068,15 @@ if ($SkipWazuhWiring) {
         Log "  deploying agb-kill-block.ps1/.cmd (netsh Active Response) to $arBinDir"
         try {
             Invoke-WebRequest -Uri "$RepoRawBase/wazuh-manager/active-response/agb-kill-block.ps1" -OutFile "$arBinDir\agb-kill-block.ps1" -UseBasicParsing
-            Invoke-WebRequest -Uri "$RepoRawBase/wazuh-manager/active-response/agb-kill-block.cmd" -OutFile "$arBinDir\agb-kill-block.cmd" -UseBasicParsing
+            # GOTCHA FIXED: jsDelivr returns 403 Forbidden for .cmd/.bat files
+            # (it blocks executable script extensions for security), so the
+            # .cmd wrapper can't be pulled from the CDN like the .ps1. It's a
+            # fixed 3-line wrapper anyway (Wazuh execd needs a .cmd/.exe entry
+            # point, it can't invoke a .ps1 directly), so just WRITE it inline -
+            # no download, no jsDelivr restriction, no network dependency. ASCII
+            # + no BOM so `@echo off` parses correctly.
+            $arCmd = "@echo off`r`nREM Wazuh AR wrapper - execd runs .cmd/.exe, not .ps1 directly.`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0agb-kill-block.ps1`"`r`n"
+            [IO.File]::WriteAllText("$arBinDir\agb-kill-block.cmd", $arCmd, (New-Object Text.ASCIIEncoding))
             # SECURITY: log the SHA256 of what was actually deployed - these
             # files EXECUTE as SYSTEM when AR fires, so having the hash in the
             # build log gives an audit trail to compare against the repo (and a
@@ -1155,7 +1173,19 @@ if ($SkipService) {
         $savedEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
         try { $testOut = & ".\suricata.exe" -c "suricata.yaml" -T 2>&1 } catch { $testOut = "$($_.Exception.Message)" } finally { $ErrorActionPreference = $savedEAP; Pop-Location }
         $errLines   = @($testOut | Where-Object { "$_" -match '^E:' })
-        $realErrors = @($errLines | Where-Object { "$_" -notmatch "file\.magic" })
+        # GOTCHA FIXED (round 2): besides the per-rule file.magic errors,
+        # Suricata ALSO prints a final summary "E: suricata: Loading
+        # signatures failed." whenever ANY rule failed to load - including
+        # the harmless file.magic ones. In -T mode that makes it exit
+        # non-zero even though at RUNTIME the engine loads all 51k good
+        # rules and runs fine (skipping the 9 file.magic rules) - confirmed
+        # live this session. That summary line is NOT a distinct root cause;
+        # a genuinely bad rule always ALSO emits its own specific
+        # detect-parse / "error parsing signature" line, which is NOT
+        # file.magic and NOT this summary, so it still survives the filter
+        # and correctly blocks the install. So ignore BOTH the file.magic
+        # lines and this summary; anything left is a real problem.
+        $realErrors = @($errLines | Where-Object { "$_" -notmatch "file\.magic" -and "$_" -notmatch "Loading signatures failed" })
         if ($realErrors.Count -gt 0) {
             Warn "  suricata -T found REAL errors (not just the harmless file.magic ones) - refusing to install an always-on service on a config that will not load. Debug it: cd '$DeployRoot'; .\suricata.exe -c suricata.yaml -T -v"
             $realErrors | Select-Object -First 5 | ForEach-Object { Warn "    $_" }

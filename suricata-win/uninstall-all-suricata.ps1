@@ -127,9 +127,14 @@ if ($AlsoRemoveNpcap) { $idsArgs += "-AlsoRemoveNpcap" }
 if ($RemoveWazuhAgent) { $idsArgs += "-RemoveWazuhAgent" }
 if ($WhatIfOnly) { $idsArgs += "-WhatIfOnly" }
 
-$localCopy = Join-Path $PSScriptRoot 'agb-full-uninstall.ps1'
+# GOTCHA FIXED: $PSScriptRoot is EMPTY on an `iwr | iex` run (the script
+# isn't a file on disk), and Join-Path throws "empty string" on it - which
+# broke both the local-copy AND download tiers, forcing every piped run
+# straight to the inline fallback. Only build the local path when
+# $PSScriptRoot is actually set (a run-from-file / repo-clone invocation).
+$localCopy = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'agb-full-uninstall.ps1' } else { $null }
 $ran = $false
-if (Test-Path $localCopy) {
+if ($localCopy -and (Test-Path $localCopy)) {
     Log "using local agb-full-uninstall.ps1 next to this script (no download needed)"
     & powershell.exe -ExecutionPolicy Bypass -File $localCopy @idsArgs
     $ran = $true

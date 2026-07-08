@@ -44,7 +44,7 @@
 [CmdletBinding()]
 param(
     [string]$SuricataVersion      = "suricata-8.0.3",     # git tag to build
-    [string]$RepoRef              = "git-home",            # branch OR full commit SHA for ALL raw.githubusercontent downloads (agb rules + AR scripts). SECURITY: pass a pinned 40-char commit SHA here - a branch ref means anyone who ever compromises the repo can push new rule/AR content that every deployed machine pulls daily as SYSTEM. A pinned SHA freezes what gets pulled until you deliberately bump it.
+    [string]$RepoRef              = "git-home",            # branch OR full commit SHA for ALL jsDelivr CDN downloads (agb rules + AR scripts), used as the @<ref> in the cdn.jsdelivr.net/gh/USER/REPO@<ref> URLs. SECURITY: pass a pinned 40-char commit SHA here - a branch ref means anyone who ever compromises the repo can push new rule/AR content that every deployed machine pulls daily as SYSTEM. A pinned SHA freezes what gets pulled until you deliberately bump it (and jsDelivr caches @<sha> immutably, so pinned pulls are fast too).
     [string]$WorkRoot             = "C:\msys64\suricata-ips-build",
     [string]$DeployRoot           = "C:\SuricataIPS",       # final self-contained output
     [string]$NpcapUrl             = "https://npcap.com/dist/npcap-1.82.exe",

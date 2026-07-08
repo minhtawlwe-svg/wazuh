@@ -538,10 +538,23 @@ function Get-EtOpenRuleset([string]$suricataExe, [string]$destPath, [string]$wor
 }
 function Get-AgbBlackDropRuleset([string]$destPath) {
     $tmpPath = "$env:TEMP\agb-black-source.rules"
+    $text = $null
     try {
         Invoke-WebRequest -Uri "$RepoRawBase/agb-black.rules" -OutFile $tmpPath -UseBasicParsing
-    } catch { return $false }
-    $text = [IO.File]::ReadAllText($tmpPath)
+        $text = [IO.File]::ReadAllText($tmpPath)
+    } catch {
+        # FALLBACK: if the download fails (e.g. GitHub 429-rate-limiting the
+        # raw endpoint after heavy use) AND this script is being run from a
+        # local repo clone, use the agb-black.rules sitting next to it. Lets
+        # a local-file run (powershell -File ...\build-suricata-ips.ps1)
+        # still produce a fully-blocking build while GitHub is throttled.
+        # $PSScriptRoot is empty on an iwr|iex run, so this only helps the
+        # local-file case - which is exactly where it's needed.
+        if ($PSScriptRoot -and (Test-Path "$PSScriptRoot\agb-black.rules")) {
+            Warn "  agb-black.rules download failed - falling back to the local copy next to this script"
+            $text = [IO.File]::ReadAllText("$PSScriptRoot\agb-black.rules")
+        } else { return $false }
+    }
     $dropText = [regex]::Replace($text, '(?m)^alert\s', 'drop ')
     [IO.File]::WriteAllText($destPath, $dropText, (New-Object Text.UTF8Encoding($false)))
     return $true
@@ -680,7 +693,13 @@ if (-not $SkipRulesSetup) {
             $passCount = ([regex]::Matches([IO.File]::ReadAllText("$RuleDir\agb-white.rules"), '(?m)^\s*pass\s')).Count
             Log "  wrote $RuleDir\agb-white.rules ($passCount pass signatures)"
         } catch {
-            Warn "  could not download agb-white.rules ($($_.Exception.Message)) - known-good traffic (e.g. *.agb.mywire.org) will alert/log normally instead of being suppressed"
+            # same local-copy fallback as agb-black/agb-heuristics (dodges GitHub 429 on local-file runs)
+            if ($PSScriptRoot -and (Test-Path "$PSScriptRoot\agb-white.rules")) {
+                Copy-Item "$PSScriptRoot\agb-white.rules" "$RuleDir\agb-white.rules" -Force
+                Warn "  agb-white.rules download failed - used the local copy next to this script"
+            } else {
+                Warn "  could not download agb-white.rules ($($_.Exception.Message)) and no local copy next to this script - known-good traffic (e.g. *.agb.mywire.org) will alert/log normally instead of being suppressed"
+            }
         }
 
         Log "  downloading ET Open ruleset (action: alert, unconverted)..."
@@ -776,7 +795,13 @@ if (-not $SkipRulesSetup) {
             Invoke-WebRequest -Uri "$RepoRawBase/agb-heuristics.rules" -OutFile "$RuleDir\agb-heuristics.rules" -UseBasicParsing
             Log "  wrote $RuleDir\agb-heuristics.rules"
         } catch {
-            Warn "  could not download agb-heuristics.rules ($($_.Exception.Message))"
+            # same local-copy fallback as agb-black.rules above (dodges 429 on local-file runs)
+            if ($PSScriptRoot -and (Test-Path "$PSScriptRoot\agb-heuristics.rules")) {
+                Copy-Item "$PSScriptRoot\agb-heuristics.rules" "$RuleDir\agb-heuristics.rules" -Force
+                Warn "  agb-heuristics.rules download failed - used the local copy next to this script"
+            } else {
+                Warn "  could not download agb-heuristics.rules ($($_.Exception.Message)) and no local copy next to this script"
+            }
         }
     }
 } else {

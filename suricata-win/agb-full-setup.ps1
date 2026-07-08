@@ -10,7 +10,7 @@
 # Scheduled Task needs to invoke it repeatedly; that's not a one-time
 # install step, it can't be inlined here).
 #
-#   iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
+#   iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
 #
 # INTERACTIVE by default - prompts for capture interface AND HOME_NET
 # (press Enter on either to auto-pick/keep the stock default). Pass
@@ -40,7 +40,7 @@ param(
     [switch]$SelfTest
 )
 
-$GitHubBase = "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win"
+$GitHubBase = "https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win"
 
 $ErrorActionPreference='Continue'
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12

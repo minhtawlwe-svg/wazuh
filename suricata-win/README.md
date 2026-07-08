@@ -38,33 +38,33 @@ No external installer dependency. Portable across any user account (machine-wide
 
 **Install everything** — Suricata + ET Open rules + agb-white/agb-black rules + daily auto-deploy + Active Response scripts:
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
 ```
 **Interactive by default** — prompts for capture interface and HOME_NET (press Enter on either to auto-pick/keep the stock default).
 
 **Install AND enroll the Wazuh agent to a manager**, or pass other options non-interactively (piping via `| iex` can't pass parameters — download first):
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WazuhManager <MANAGER_IP> -RegPassword 'YOUR_AUTHD_PASSWORD' -SelfTest
+$u='https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WazuhManager <MANAGER_IP> -RegPassword 'YOUR_AUTHD_PASSWORD' -SelfTest
 ```
 
 **Install fully unattended (no prompts):**
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -NoPrompt -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
+$u='https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-setup.ps1';$f="$env:TEMP\agb-full-setup.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -NoPrompt -CaptureInterfaceName 'Wi-Fi' -HomeNet '[192.168.0.0/16]'
 ```
 
 **Test alerts on demand:**
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
+$u='https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
 ```
 
 **Uninstall everything** (deep clean; keeps Npcap + Wazuh agent):
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
 ```
 
 **Preview an uninstall (changes nothing), or pass other switches** (download first — piping can't pass parameters):
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1';$f="$env:TEMP\agb-full-uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
+$u='https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-uninstall.ps1';$f="$env:TEMP\agb-full-uninstall.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f -WhatIfOnly
 ```
 
 ---
@@ -160,7 +160,7 @@ sudo /var/ossec/bin/agent_control -lc && sudo grep -c "Suricata: Alert" /var/oss
 
 Run it (single line):
 ```powershell
-$u='https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
+$u='https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/Test-SuricataAlerts.ps1';$f="$env:TEMP\Test-SuricataAlerts.ps1";[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr $u -OutFile $f -UseBasicParsing;powershell -ExecutionPolicy Bypass -File $f
 ```
 Confirm on the manager: `sudo grep WAZUH-TEST /var/ossec/logs/alerts/alerts.json`
 
@@ -213,7 +213,7 @@ available, e.g. Sysmon-sourced rule 100974) + blocks the IP via netsh firewall
 ### Add an agent to the fleet
 Run the installer — it covers Suricata, the auto-deploy task, and the Active Response scripts in one pass:
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-setup.ps1 -UseBasicParsing | iex
 ```
 An agent running this is only **half** the setup — the manager also needs the rules + Active Response binding configured once (see [Manager-side setup](#manager-side-setup)).
 
@@ -239,7 +239,7 @@ Get-NetFirewallRule -DisplayName "AGB-BLOCK-*" | Select DisplayName, Enabled, Ac
 
 ### Remove an agent from the fleet
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
 ```
 This does NOT remove the manager-side rules/AR binding — that's a separate, one-time manager change (see below).
 
@@ -301,7 +301,7 @@ If that last command shows `EXIT:0` with no `ERROR` lines, restart the manager t
 Suricata has a real inline/IPS capture mode using a driver called **WinDivert**, which can drop a malicious packet instantly with zero dependency on Wazuh. This capability does **not** exist in the prebuilt MSI — it only exists if Suricata is compiled from source with WinDivert support explicitly enabled.
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
 ```
 
 **This is a separate, experimental build — it does not touch or replace the IDS-mode install above.** It's fully self-contained from scratch (installs Npcap too, if not already present) and produces a **ready-to-test, live-fire-verified** deployment in `C:\SuricataIPS\`: the binary, all runtime DLLs, a configured `suricata.yaml`, rules, and (if a Wazuh agent is present) automatic wiring into it. **By default it also registers and starts an always-on `SuricataIPS` Windows service** (filter: `true` — both directions, required for HTTP/TLS inspection) at the end of the same run — see the warning and confirmation step below; pass `-SkipService` to stop at a manual/foreground-test build instead. **Interactive by default** — prompts for capture interface and HOME_NET, same UX as `agb-full-setup.ps1` (pass `-NoPrompt` to auto-pick everything and skip the service confirmation too). Takes 20-60+ minutes on a clean machine (compiling ~250 Rust crates is the biggest cost), much faster on a re-run since it skips anything already in place; needs ~5 GB free disk.
@@ -358,7 +358,7 @@ A full narrative write-up of the entire build (including every error exactly as 
 
 That said, **it's the default** as of this build — `build-suricata-ips.ps1` registers and starts it automatically at the end of a normal run (after a typed `YES` confirmation, or automatically under `-NoPrompt`). Pass `-SkipService` to opt out and stop at a manual/foreground test instead. To add it later to an already-built deployment without rerunning the whole build:
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/install-suricata-ips-service.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/install-suricata-ips-service.ps1 -UseBasicParsing | iex
 ```
 Both paths prompt for an explicit `YES` confirmation (repeating the warning above) before doing anything, unless `-NoPrompt`/`-Force` is passed. Registers a Windows service named **`SuricataIPS`** — deliberately *not* the generic `Suricata` name Suricata's own `--service-install` would use internally (that name is a hardcoded compile-time constant, not configurable, and could collide with a regular IDS-mode Suricata service if one's ever added on the same machine). Auto-starts on boot, restarts itself on crash (via `sc.exe failure`), uses the `true` filter by default — both directions, required for HTTP/TLS content inspection (override with `-WinDivertFilter`).
 
@@ -370,7 +370,7 @@ To remove it: `.\install-suricata-ips-service.ps1 -Remove` (or run `uninstall-al
 
 ### Removing the IPS build (and/or everything else)
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-all-suricata.ps1 -UseBasicParsing | iex
+[Net.ServicePointManager]::SecurityProtocol='Tls12';iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/uninstall-all-suricata.ps1 -UseBasicParsing | iex
 ```
 Removes the IPS deploy folder (`C:\SuricataIPS\`), the build workspace (source tree, Rust cache, downloaded SDKs), the `SuricataIPS` service if installed, the Wazuh `ossec.conf` wiring if present, and the WinDivert kernel driver if it was ever registered — **and** runs `agb-full-uninstall.ps1` for the IDS-mode install, so this one command tears down everything. MSYS2 itself is kept by default (pass `-AlsoRemoveMsys2` to remove the whole toolchain, not just this project's use of it) since it's a general-purpose dev environment, not Suricata-specific.
 

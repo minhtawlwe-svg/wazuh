@@ -12,7 +12,7 @@
 #      and the WinDivert kernel driver if it was ever registered (it only
 #      registers the first time --windivert actually runs).
 #
-#   iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/uninstall-all-suricata.ps1 -UseBasicParsing | iex
+#   iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/uninstall-all-suricata.ps1 -UseBasicParsing | iex
 #
 # KEEPS by default: Npcap, MSYS2 itself (a general dev toolchain, not
 # Suricata-specific), and the Wazuh agent.
@@ -120,7 +120,7 @@ Write-Host "===== PART 1/2: IDS-mode Suricata =====" -ForegroundColor Green
 #      failures (429s clear quickly)
 #   3. if BOTH fail, fall back to the self-contained Invoke-IdsCleanupInline
 #      above - covers every IDS artifact with zero network dependency
-$Base = "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win"
+$Base = "https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win"
 [Net.ServicePointManager]::SecurityProtocol = 'Tls12'
 $idsArgs = @()
 if ($AlsoRemoveNpcap) { $idsArgs += "-AlsoRemoveNpcap" }

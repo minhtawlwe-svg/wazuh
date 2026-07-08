@@ -13,7 +13,7 @@
 # problem (see project_c2_detection_engineering memory).
 #
 # One-liner (elevated PowerShell):
-#   iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/fix-eve-stats-overflow.ps1 -UseBasicParsing | iex
+#   iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/fix-eve-stats-overflow.ps1 -UseBasicParsing | iex
 # ============================================================================
 
 $ErrorActionPreference = "Stop"

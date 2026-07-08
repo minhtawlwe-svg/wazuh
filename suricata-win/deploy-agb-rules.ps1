@@ -15,7 +15,7 @@
 # ============================================================================
 
 $ErrorActionPreference = "Stop"
-$BaseUrl     = "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win"
+$BaseUrl     = "https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win"
 $DestDir     = "C:\ProgramData\Suricata\rules"
 $SuricataExe = "C:\Program Files\Suricata\suricata.exe"
 $SuricataYaml= "C:\Program Files\Suricata\suricata.yaml"

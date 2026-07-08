@@ -9,7 +9,7 @@
 # MSI and requires compiling Suricata from source with WinDivert support
 # explicitly enabled. This script does that whole build.
 #
-#   iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
+#   iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/build-suricata-ips.ps1 -UseBasicParsing | iex
 #
 # This is a SEPARATE, EXPERIMENTAL build - it does not touch or replace the
 # existing IDS-mode Suricata install. Output lands in a standalone deploy
@@ -79,7 +79,7 @@ $ErrorActionPreference = "Stop"
 # call happens.
 $env:MSYSTEM = "UCRT64"
 # single source of truth for every download out of this repo - see -RepoRef above
-$RepoRawBase = "https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/$RepoRef/suricata-win"
+$RepoRawBase = "https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@$RepoRef/suricata-win"
 function Log($m)  { Write-Host "[ips-build] $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "[ips-build] WARN: $m" -ForegroundColor Yellow }
 function Die($m)  {

@@ -8,7 +8,7 @@
 # BOTH scheduled tasks, the eve.json <localfile>, the Active Response
 # scripts, Defender exclusions, and Suricata firewall rules.
 #
-#   iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
+#   iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/agb-full-uninstall.ps1 -UseBasicParsing | iex
 #
 # KEEPS by default: Npcap and the Wazuh AGENT itself.
 #   -AlsoRemoveNpcap   also uninstall Npcap (interactive)

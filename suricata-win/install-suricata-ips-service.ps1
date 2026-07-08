@@ -10,7 +10,7 @@
 # confirming - this is a materially bigger commitment than anything the
 # build script itself does automatically.
 #
-#   iwr https://raw.githubusercontent.com/minhtawlwe-svg/wazuh/git-home/suricata-win/install-suricata-ips-service.ps1 -UseBasicParsing | iex
+#   iwr https://cdn.jsdelivr.net/gh/minhtawlwe-svg/wazuh@git-home/suricata-win/install-suricata-ips-service.ps1 -UseBasicParsing | iex
 #
 # Registered as its own distinct service name "SuricataIPS", NOT the
 # generic "Suricata" name Suricata's own --service-install would use

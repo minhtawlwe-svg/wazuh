@@ -1112,16 +1112,30 @@ if ($SkipService) {
         # at the next boot. Validate the full config HERE, visibly, and
         # refuse to install the service if it can't load.
         Log "  validating full config with suricata -T before installing the service..."
-        $tExit = 1
+        # GOTCHA FIXED (crashed the whole build on 2026-07-08): suricata -T on
+        # Windows ALWAYS exits non-zero and prints "E: ... unknown rule keyword
+        # 'file.magic'" for ~9 ET Open signatures - the Windows build ships no
+        # libmagic, so those rules are harmlessly SKIPPED at runtime while
+        # everything else loads fine. The original gate had two bugs:
+        #  (a) `& suricata.exe ... 2>&1` let that stderr become a TERMINATING
+        #      error under the script-wide $ErrorActionPreference='Stop',
+        #      aborting the entire build with "UNHANDLED ERROR: ... file.magic"
+        #  (b) it treated ANY non-zero exit as fatal, so it could NEVER pass on
+        #      Windows even without the crash.
+        # Fix: capture output with EAP relaxed, then fail ONLY on errors that
+        # are NOT the known-harmless file.magic ones - exactly the rule
+        # deploy-agb-rules.ps1 already applies.
+        $testOut = $null
         Push-Location $DeployRoot
-        try {
-            & ".\suricata.exe" -c "suricata.yaml" -T 2>&1 | Out-Null
-            $tExit = $LASTEXITCODE
-        } finally { Pop-Location }
-        if ($tExit -ne 0) {
-            Warn "  suricata -T FAILED (exit $tExit) - refusing to install an always-on service on a config that will not load. Debug it: cd '$DeployRoot'; .\suricata.exe -c suricata.yaml -T -v"
+        $savedEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $testOut = & ".\suricata.exe" -c "suricata.yaml" -T 2>&1 } catch { $testOut = "$($_.Exception.Message)" } finally { $ErrorActionPreference = $savedEAP; Pop-Location }
+        $errLines   = @($testOut | Where-Object { "$_" -match '^E:' })
+        $realErrors = @($errLines | Where-Object { "$_" -notmatch "file\.magic" })
+        if ($realErrors.Count -gt 0) {
+            Warn "  suricata -T found REAL errors (not just the harmless file.magic ones) - refusing to install an always-on service on a config that will not load. Debug it: cd '$DeployRoot'; .\suricata.exe -c suricata.yaml -T -v"
+            $realErrors | Select-Object -First 5 | ForEach-Object { Warn "    $_" }
         } else {
-        Log "  config test passed"
+        if ($errLines.Count -gt 0) { Log "  config test passed (ignored $($errLines.Count) expected file.magic errors - those ET rules skip, everything else loads)" } else { Log "  config test passed" }
         $svcName = "SuricataIPS"
         $existingSvc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
         if ($existingSvc) {
